@@ -2,3 +2,5 @@ data
 .settings
 .classpath
 .project
+target
+geoIndex
