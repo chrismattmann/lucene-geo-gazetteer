@@ -265,12 +265,34 @@ public class GeoNameResolver {
 			longitude = OUT_OF_BOUNDS;
 		}
 
+		int population = 0;
+		try {
+			population = Integer.parseInt(tokens[14]);
+		} catch (NumberFormatException e) {
+			population = 0;// Treat as population does not exists
+		}
+
+		// Additional fields to rank more known locations higher
+		// All available codes can be viewed on www.geonames.org
+		String featureClass = tokens[6];// broad category of location
+		String featureCode = tokens[7];// more granular category
+		String countryCode = tokens[8];
+		String admin1Code = tokens[10];// eg US State
+		String admin2Code = tokens[11];// eg county
+
 		Document doc = new Document();
 		doc.add(new IntField("ID", ID, Field.Store.YES));
 		doc.add(new TextField("name", name, Field.Store.YES));
 		doc.add(new DoubleField("longitude", longitude, Field.Store.YES));
 		doc.add(new DoubleField("latitude", latitude, Field.Store.YES));
 		doc.add(new TextField("alternatenames", alternatenames, Field.Store.YES));
+		doc.add(new TextField("featureClass", featureClass, Field.Store.YES));
+		doc.add(new TextField("featureCode", featureCode, Field.Store.YES));
+		doc.add(new TextField("countryCode", countryCode, Field.Store.YES));
+		doc.add(new TextField("admin1Code", admin1Code, Field.Store.YES));
+		doc.add(new TextField("admin2Code", admin2Code, Field.Store.YES));
+		doc.add(new IntField("population", population, Field.Store.YES));
+
 		try {
 			indexWriter.addDocument(doc);
 		} catch (IOException e) {
