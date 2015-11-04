@@ -35,6 +35,7 @@ Send them to [Chris A. Mattmann](mailto:chris.a.mattmann@jpl.nasa.gov).
 
 Contributors 
 ============ 
+* Madhav Sharan, USC
 * Yun Li, USC 
 * Chris A. Mattmann, JPL
 
