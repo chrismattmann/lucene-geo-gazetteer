@@ -64,6 +64,9 @@ import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
 
 public class GeoNameResolver {
+	/**
+	 * Below constants define name of field in lucene index
+	 */
 	public static final String FIELD_NAME_ID = "ID";
 	public static final String FIELD_NAME_NAME = "name";
 	public static final String FIELD_NAME_LONGITUDE = "longitude";
@@ -75,6 +78,12 @@ public class GeoNameResolver {
 	public static final String FIELD_NAME_ADMIN1_CODE = "admin1Code";
 	public static final String FIELD_NAME_ADMIN2_CODE = "admin2Code";
 	public static final String FIELD_NAME_POPULATION = "population";
+	/**
+	 * Below constants define weight multipliers used for result relevance.
+	 */
+	private static final int WEIGHT_SORT_ORDER = 2;
+	private static final int WEIGHT_SIZE_ALT_NAME = 50;
+	private static final int WEIGHT_NAME_MATCH = 500;
 	
 	private static final Logger LOG = Logger.getLogger(GeoNameResolver.class
 			.getName());
@@ -115,7 +124,6 @@ public class GeoNameResolver {
 		if (locationNameEntities.size() >= 200)
 			hitsPerPage = 5; // avoid heavy computation
 		IndexSearcher searcher = new IndexSearcher(reader);
-		
 		Query q = null;
 
 		HashMap<String, List<List<String>>> allCandidates = new HashMap<String, List<List<String>>>();
@@ -213,8 +221,8 @@ public class GeoNameResolver {
 				int weight;
 				// get cur's ith resolved entry's name
 				String resolvedName = cur.get(i).get(0);
-				//Assign a weight of 10 if extracted name is found in name
-				weight = resolvedName.contains(extractedName) ? 500 : 0;  
+				//Assign a weight as per configuration if extracted name is found in name
+				weight = resolvedName.contains(extractedName) ? WEIGHT_NAME_MATCH : 0;  
 				
 				// get all alternate names of cur's ith resolved entry's 
 				String[] altNames = cur.get(i).get(3).split(",");
@@ -228,7 +236,7 @@ public class GeoNameResolver {
 				weight += getCalibratedWeight(altNames.length, altEditDist);
 				
 				//Give preference to sorted results. 0th result should have more priority
-				weight += (cur.size()-i) * 2;
+				weight += (cur.size()-i) * WEIGHT_SORT_ORDER;
 						
 				if (weight > maxWeight) {
 					maxWeight = weight;
@@ -246,8 +254,8 @@ public class GeoNameResolver {
 
 	/**
 	 * Returns a weight for average edit distance for set of alternate name<br/><br/>
-	 * altNamesSize * 50 - (altEditDist/altNamesSize) ;<br/><br/>
-	 * altNamesSize * 50 ensure more priority for results with more alternate names.<br/> 
+	 * altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;<br/><br/>
+	 * altNamesSize * WEIGHT_SIZE_ALT_NAME ensure more priority for results with more alternate names.<br/> 
 	 * altEditDist/altNamesSize is average edit distance. <br/>
 	 * Lesser the average, higher the over all expression
 	 * @param altNamesSize - Count of altNames
@@ -255,7 +263,7 @@ public class GeoNameResolver {
 	 * @return
 	 */
 	public float getCalibratedWeight(int altNamesSize, float altEditDist) { 
-		return altNamesSize * 50 - (altEditDist/altNamesSize) ;
+		return altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;
 	}
 
 	/**
@@ -352,14 +360,11 @@ public class GeoNameResolver {
 		doc.add(new DoubleField(FIELD_NAME_LONGITUDE, longitude, Field.Store.YES));
 		doc.add(new DoubleField(FIELD_NAME_LATITUDE, latitude, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ALTERNATE_NAMES, alternatenames, Field.Store.YES));
-		//doc.add(new TextField(FIELD_NAME_FEATURE_CLASS, featureClass, Field.Store.YES));
 		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CLASS, new BytesRef(featureClass.getBytes())) );//sort enabled field
-		//doc.add(new TextField(FIELD_NAME_FEATURE_CODE, featureCode, Field.Store.YES));
 		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CODE, new BytesRef(featureCode.getBytes())) );//sort enabled field
 		doc.add(new TextField(FIELD_NAME_COUNTRY_CODE, countryCode, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ADMIN1_CODE, admin1Code, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ADMIN2_CODE, admin2Code, Field.Store.YES));
-		//doc.add(new IntField(FIELD_NAME_POPULATION, population, Field.Store.YES));
 		doc.add(new NumericDocValuesField(FIELD_NAME_POPULATION, population));//sort enabled field
 
 
