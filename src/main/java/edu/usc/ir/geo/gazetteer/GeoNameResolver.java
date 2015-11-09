@@ -27,7 +27,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -39,13 +38,15 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.OptionBuilder;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
-import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
+import org.apache.lucene.document.BinaryDocValuesField;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoubleField;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.IntField;
+import org.apache.lucene.document.NumericDocValuesField;
 import org.apache.lucene.document.TextField;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
@@ -55,11 +56,35 @@ import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
-import org.apache.lucene.search.TopScoreDocCollector;
+import org.apache.lucene.search.Sort;
+import org.apache.lucene.search.SortField;
+import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
+import org.apache.lucene.util.BytesRef;
 
 public class GeoNameResolver {
+	/**
+	 * Below constants define name of field in lucene index
+	 */
+	public static final String FIELD_NAME_ID = "ID";
+	public static final String FIELD_NAME_NAME = "name";
+	public static final String FIELD_NAME_LONGITUDE = "longitude";
+	public static final String FIELD_NAME_LATITUDE = "latitude";
+	public static final String FIELD_NAME_ALTERNATE_NAMES = "alternatenames";
+	public static final String FIELD_NAME_FEATURE_CLASS = "featureClass";
+	public static final String FIELD_NAME_FEATURE_CODE = "featureCode";
+	public static final String FIELD_NAME_COUNTRY_CODE = "countryCode";
+	public static final String FIELD_NAME_ADMIN1_CODE = "admin1Code";
+	public static final String FIELD_NAME_ADMIN2_CODE = "admin2Code";
+	public static final String FIELD_NAME_POPULATION = "population";
+	/**
+	 * Below constants define weight multipliers used for result relevance.
+	 */
+	private static final int WEIGHT_SORT_ORDER = 2;
+	private static final int WEIGHT_SIZE_ALT_NAME = 50;
+	private static final int WEIGHT_NAME_MATCH = 500;
+	
 	private static final Logger LOG = Logger.getLogger(GeoNameResolver.class
 			.getName());
 	private static final Double OUT_OF_BOUNDS = 999999.0;
@@ -78,12 +103,12 @@ public class GeoNameResolver {
 	 * @throws RuntimeException
 	 */
 
-	public HashMap<String, ArrayList<String>> searchGeoName(String indexerPath, 
-			ArrayList<String> locationNameEntities) throws IOException {
+	public HashMap<String, List<String>> searchGeoName(String indexerPath, 
+			List<String> locationNameEntities) throws IOException {
 
 		if (locationNameEntities.size() == 0
 				|| locationNameEntities.get(0).length() == 0)
-			return new HashMap<String, ArrayList<String>>();
+			return new HashMap<String, List<String>>();
 		File indexfile = new File(indexerPath);
 		indexDir = FSDirectory.open(indexfile.toPath());
 
@@ -99,45 +124,55 @@ public class GeoNameResolver {
 		if (locationNameEntities.size() >= 200)
 			hitsPerPage = 5; // avoid heavy computation
 		IndexSearcher searcher = new IndexSearcher(reader);
-
 		Query q = null;
 
-		HashMap<String, ArrayList<ArrayList<String>>> allCandidates = new HashMap<String, ArrayList<ArrayList<String>>>();
+		HashMap<String, List<List<String>>> allCandidates = new HashMap<String, List<List<String>>>();
 
 		for (String name : locationNameEntities) {
 
 			if (!allCandidates.containsKey(name)) {
 				try {
-					q = new MultiFieldQueryParser(new String[] { "name",
-							"alternatenames" }, analyzer).parse(name);
-					TopScoreDocCollector collector = TopScoreDocCollector
-							.create(hitsPerPage);
-					searcher.search(q, collector);
-					ScoreDoc[] hits = collector.topDocs().scoreDocs;
-					ArrayList<ArrayList<String>> topHits = new ArrayList<ArrayList<String>>();
+					//query is wrapped in additional quotes (") to avoid query tokenization on space
+					q = new MultiFieldQueryParser(new String[] { FIELD_NAME_NAME,
+							FIELD_NAME_ALTERNATE_NAMES }, analyzer).parse(String.format("\"%s\"", name) );
+										
+					//"feature class" sort order as defined in FeatureClassComparator
+					SortField featureClassSort = CustomLuceneGeoGazetteerComparator.getFeatureClassSortField();
+					
+					//"feature code" sort order as defined in FeatureClassComparator
+					SortField featureCodeSort = CustomLuceneGeoGazetteerComparator.getFeatureCodeSortField();
+					
+					//sort descending on population
+					SortField populationSort = new SortedNumericSortField(FIELD_NAME_POPULATION, SortField.Type.LONG, true);
+					
+					Sort sort = new Sort(featureClassSort, featureCodeSort, populationSort);
+					
+					ScoreDoc[] hits = searcher.search(q, hitsPerPage , sort).scoreDocs;
+
+					List<List<String>> topHits = new ArrayList<List<String>>();
 
 					for (int i = 0; i < hits.length; ++i) {
 						ArrayList<String> tmp1 = new ArrayList<String>();
-						ArrayList<String> tmp2 = new ArrayList<String>();
+
 						int docId = hits[i].doc;
 						Document d;
 						try {
 							d = searcher.doc(docId);
-							tmp1.add(d.get("name"));
-							tmp1.add(d.get("longitude"));
-							tmp1.add(d.get("latitude"));
-							if (!d.get("alternatenames").equalsIgnoreCase(
-									d.get("name"))) {
-								tmp2.add(d.get("alternatenames"));
-								tmp2.add(d.get("longitude"));
-								tmp2.add(d.get("latitude"));
+							tmp1.add(d.get(FIELD_NAME_NAME));
+							tmp1.add(d.get(FIELD_NAME_LONGITUDE));
+							tmp1.add(d.get(FIELD_NAME_LATITUDE));
+							//If alternate names are empty put name as actual name
+							//This covers missing data and equals weight for later computation
+							if (d.get(FIELD_NAME_ALTERNATE_NAMES).isEmpty()){
+								tmp1.add(d.get(FIELD_NAME_NAME));
+							}else{
+								tmp1.add(d.get(FIELD_NAME_ALTERNATE_NAMES));
 							}
+
 						} catch (IOException e) {
 							e.printStackTrace();
 						}
 						topHits.add(tmp1);
-						if (tmp2.size() != 0)
-							topHits.add(tmp2);
 					}
 					allCandidates.put(name, topHits);
 				} catch (org.apache.lucene.queryparser.classic.ParseException e) {
@@ -146,7 +181,7 @@ public class GeoNameResolver {
 			}
 		}
 
-		HashMap<String, ArrayList<String>> resolvedEntities = new HashMap<String, ArrayList<String>>();
+		HashMap<String, List<String>> resolvedEntities = new HashMap<String, List<String>>();
 		pickBestCandidates(resolvedEntities, allCandidates);
 		reader.close();
 
@@ -170,26 +205,65 @@ public class GeoNameResolver {
 	 */
 
 	private void pickBestCandidates(
-			HashMap<String, ArrayList<String>> resolvedEntities,
-			HashMap<String, ArrayList<ArrayList<String>>> allCandidates) {
+			HashMap<String, List<String>> resolvedEntities,
+			HashMap<String, List<List<String>>> allCandidates) {
 
 		for (String extractedName : allCandidates.keySet()) {
-			ArrayList<ArrayList<String>> cur = allCandidates.get(extractedName);
-			int minDistance = Integer.MAX_VALUE, minIndex = -1;
+			
+			List<List<String>> cur = allCandidates.get(extractedName);
+			if(cur.isEmpty())
+				continue;//continue if no results found
+			
+			int maxWeight = Integer.MIN_VALUE ;
+			//In case weight is equal for all return top element
+			int bestIndex = 0;
 			for (int i = 0; i < cur.size(); ++i) {
-				String resolvedName = cur.get(i).get(0);// get cur's ith
-														// resolved entry's name
-				int distance = StringUtils.getLevenshteinDistance(
-						extractedName, resolvedName);
-				if (distance < minDistance) {
-					minDistance = distance;
-					minIndex = i;
+				int weight;
+				// get cur's ith resolved entry's name
+				String resolvedName = cur.get(i).get(0);
+				//Assign a weight as per configuration if extracted name is found in name
+				weight = resolvedName.contains(extractedName) ? WEIGHT_NAME_MATCH : 0;  
+				
+				// get all alternate names of cur's ith resolved entry's 
+				String[] altNames = cur.get(i).get(3).split(",");
+				float altEditDist = 0;
+				for(String altName : altNames){
+					if(altName.contains(extractedName)){
+						altEditDist+=StringUtils.getLevenshteinDistance(extractedName, altName);
+					}
+				}
+				//lesser the edit distance more should be the weight
+				weight += getCalibratedWeight(altNames.length, altEditDist);
+				
+				//Give preference to sorted results. 0th result should have more priority
+				weight += (cur.size()-i) * WEIGHT_SORT_ORDER;
+						
+				if (weight > maxWeight) {
+					maxWeight = weight;
+					bestIndex = i;
 				}
 			}
-			if (minIndex == -1)
+			if (bestIndex == -1)
 				continue;
-			resolvedEntities.put(extractedName, cur.get(minIndex));
+			
+			//remove alternate name from allCandidates element before adding
+			cur.get(bestIndex).remove(3);
+			resolvedEntities.put(extractedName, cur.get(bestIndex));
 		}
+	}
+
+	/**
+	 * Returns a weight for average edit distance for set of alternate name<br/><br/>
+	 * altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;<br/><br/>
+	 * altNamesSize * WEIGHT_SIZE_ALT_NAME ensure more priority for results with more alternate names.<br/> 
+	 * altEditDist/altNamesSize is average edit distance. <br/>
+	 * Lesser the average, higher the over all expression
+	 * @param altNamesSize - Count of altNames
+	 * @param altEditDist - sum of individual edit distances
+	 * @return
+	 */
+	public float getCalibratedWeight(int altNamesSize, float altEditDist) { 
+		return altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;
 	}
 
 	/**
@@ -281,17 +355,18 @@ public class GeoNameResolver {
 		String admin2Code = tokens[11];// eg county
 
 		Document doc = new Document();
-		doc.add(new IntField("ID", ID, Field.Store.YES));
-		doc.add(new TextField("name", name, Field.Store.YES));
-		doc.add(new DoubleField("longitude", longitude, Field.Store.YES));
-		doc.add(new DoubleField("latitude", latitude, Field.Store.YES));
-		doc.add(new TextField("alternatenames", alternatenames, Field.Store.YES));
-		doc.add(new TextField("featureClass", featureClass, Field.Store.YES));
-		doc.add(new TextField("featureCode", featureCode, Field.Store.YES));
-		doc.add(new TextField("countryCode", countryCode, Field.Store.YES));
-		doc.add(new TextField("admin1Code", admin1Code, Field.Store.YES));
-		doc.add(new TextField("admin2Code", admin2Code, Field.Store.YES));
-		doc.add(new IntField("population", population, Field.Store.YES));
+		doc.add(new IntField(FIELD_NAME_ID, ID, Field.Store.YES));
+		doc.add(new TextField(FIELD_NAME_NAME, name, Field.Store.YES));
+		doc.add(new DoubleField(FIELD_NAME_LONGITUDE, longitude, Field.Store.YES));
+		doc.add(new DoubleField(FIELD_NAME_LATITUDE, latitude, Field.Store.YES));
+		doc.add(new TextField(FIELD_NAME_ALTERNATE_NAMES, alternatenames, Field.Store.YES));
+		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CLASS, new BytesRef(featureClass.getBytes())) );//sort enabled field
+		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CODE, new BytesRef(featureCode.getBytes())) );//sort enabled field
+		doc.add(new TextField(FIELD_NAME_COUNTRY_CODE, countryCode, Field.Store.YES));
+		doc.add(new TextField(FIELD_NAME_ADMIN1_CODE, admin1Code, Field.Store.YES));
+		doc.add(new TextField(FIELD_NAME_ADMIN2_CODE, admin2Code, Field.Store.YES));
+		doc.add(new NumericDocValuesField(FIELD_NAME_POPULATION, population));//sort enabled field
+
 
 		try {
 			indexWriter.addDocument(doc);
@@ -323,7 +398,7 @@ public class GeoNameResolver {
 
 		String indexPath = null;
 		String gazetteerPath = null;
-		ArrayList<String> geoTerms = null;
+		List<String> geoTerms = null;
 		Options options = new Options();
 		options.addOption(buildOpt);
 		options.addOption(searchOpt);
@@ -361,14 +436,14 @@ public class GeoNameResolver {
 			if (line.hasOption("search")) {
 				geoTerms = new ArrayList<String>(Arrays.asList(line
 						.getOptionValues("search")));
-				Map<String, ArrayList<String>> resolved = resolver
+				Map<String, List<String>> resolved = resolver
 						.searchGeoName(indexPath, geoTerms);
 				System.out.println("[");
 				List<String> keys = (List<String>)(List<?>)Arrays.asList(resolved.keySet().toArray());
 				for (int j=0; j < keys.size(); j++) {
 					String n = keys.get(j);
 					System.out.println("{\"" + n + "\" : [");
-					ArrayList<String> terms = resolved.get(n);
+					List<String> terms = resolved.get(n);
 					for (int i = 0; i < terms.size(); i++) {
 						String res = terms.get(i);
 						if (i < terms.size() - 1) {
