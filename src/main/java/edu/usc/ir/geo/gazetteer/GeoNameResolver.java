@@ -24,9 +24,11 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -95,16 +97,18 @@ public class GeoNameResolver {
 
 	/**
 	 * Search corresponding GeoName for each location entity
-	 * 
+	 * @param count
+	 * 			  Number of results for one locations
 	 * @param querystr
 	 *            it's the NER actually
+	 * 
 	 * @return HashMap each name has a list of resolved entities
 	 * @throws IOException
 	 * @throws RuntimeException
 	 */
 
 	public HashMap<String, List<String>> searchGeoName(String indexerPath, 
-			List<String> locationNameEntities) throws IOException {
+			List<String> locationNameEntities, int count) throws IOException {
 
 		if (locationNameEntities.size() == 0
 				|| locationNameEntities.get(0).length() == 0)
@@ -168,6 +172,9 @@ public class GeoNameResolver {
 							}else{
 								tmp1.add(d.get(FIELD_NAME_ALTERNATE_NAMES));
 							}
+							tmp1.add(d.get(FIELD_NAME_COUNTRY_CODE));
+							tmp1.add(d.get(FIELD_NAME_ADMIN1_CODE));
+							tmp1.add(d.get(FIELD_NAME_ADMIN2_CODE));
 
 						} catch (IOException e) {
 							e.printStackTrace();
@@ -182,7 +189,7 @@ public class GeoNameResolver {
 		}
 
 		HashMap<String, List<String>> resolvedEntities = new HashMap<String, List<String>>();
-		pickBestCandidates(resolvedEntities, allCandidates);
+		pickBestCandidates(resolvedEntities, allCandidates, count);
 		reader.close();
 
 		return resolvedEntities;
@@ -200,13 +207,15 @@ public class GeoNameResolver {
 	 * @param allCandidates
 	 *            each location name may hits several documents, this is the
 	 *            collection for all hitted documents
+	 * @param count 
+	 * 			  Number of results for one locations
 	 * @throws IOException
 	 * @throws RuntimeException
 	 */
 
 	private void pickBestCandidates(
 			HashMap<String, List<String>> resolvedEntities,
-			HashMap<String, List<List<String>>> allCandidates) {
+			HashMap<String, List<List<String>>> allCandidates, int count) {
 
 		for (String extractedName : allCandidates.keySet()) {
 			
@@ -217,6 +226,14 @@ public class GeoNameResolver {
 			int maxWeight = Integer.MIN_VALUE ;
 			//In case weight is equal for all return top element
 			int bestIndex = 0;
+			//Priority queue to return top elements
+			PriorityQueue<List<String>> pq = new PriorityQueue<>(cur.size(), new Comparator<List<String>>() {
+				@Override
+				public int compare(List<String> o1, List<String> o2) {
+					return Integer.compare(Integer.parseInt(o2.get(7)), Integer.parseInt(o1.get(7)));
+				}
+			});
+
 			for (int i = 0; i < cur.size(); ++i) {
 				int weight;
 				// get cur's ith resolved entry's name
@@ -237,18 +254,32 @@ public class GeoNameResolver {
 				
 				//Give preference to sorted results. 0th result should have more priority
 				weight += (cur.size()-i) * WEIGHT_SORT_ORDER;
+				
+				cur.get(i).add(Integer.toString(weight));
 						
 				if (weight > maxWeight) {
 					maxWeight = weight;
 					bestIndex = i;
 				}
+				
+				pq.add(cur.get(i)) ;
 			}
 			if (bestIndex == -1)
 				continue;
 			
-			//remove alternate name from allCandidates element before adding
-			cur.get(bestIndex).remove(3);
-			resolvedEntities.put(extractedName, cur.get(bestIndex));
+			List<String> resultList = new ArrayList<>();
+			
+			for(int i =0 ; i< count && !pq.isEmpty() ; i++){
+				List<String> result = pq.poll();
+				//remove weight from allCandidates element before adding
+				result.remove(7);
+				//remove alternate name from allCandidates element before adding
+				result.remove(3);
+				
+				resultList.addAll(result);
+			}
+			
+			resolvedEntities.put(extractedName, resultList);
 		}
 	}
 
@@ -395,6 +426,10 @@ public class GeoNameResolver {
 
 		Option helpOpt = OptionBuilder.withLongOpt("help")
 				.withDescription("Print this message.").create('h');
+		
+		Option resultCountOpt = OptionBuilder.withArgName("number of results").withLongOpt("count").hasArgs()
+				.withDescription("Number of best results to be returned for one location").withType(Integer.class)
+				.create('c');
 
 		String indexPath = null;
 		String gazetteerPath = null;
@@ -404,6 +439,7 @@ public class GeoNameResolver {
 		options.addOption(searchOpt);
 		options.addOption(indexOpt);
 		options.addOption(helpOpt);
+		options.addOption(resultCountOpt);
 
 		// create the parser
 		CommandLineParser parser = new DefaultParser();
@@ -436,8 +472,13 @@ public class GeoNameResolver {
 			if (line.hasOption("search")) {
 				geoTerms = new ArrayList<String>(Arrays.asList(line
 						.getOptionValues("search")));
+				String countStr = line.getOptionValue("count", "1");
+				int count = 1;
+				if (countStr.matches("\\d+"))
+					count = Integer.parseInt(countStr);
+
 				Map<String, List<String>> resolved = resolver
-						.searchGeoName(indexPath, geoTerms);
+						.searchGeoName(indexPath, geoTerms, count);
 				System.out.println("[");
 				List<String> keys = (List<String>)(List<?>)Arrays.asList(resolved.keySet().toArray());
 				for (int j=0; j < keys.size(); j++) {
