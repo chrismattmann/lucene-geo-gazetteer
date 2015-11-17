@@ -83,9 +83,9 @@ public class GeoNameResolver {
 	/**
 	 * Below constants define weight multipliers used for result relevance.
 	 */
-	private static final int WEIGHT_SORT_ORDER = 2;
+	private static final int WEIGHT_SORT_ORDER = 20;
 	private static final int WEIGHT_SIZE_ALT_NAME = 50;
-	private static final int WEIGHT_NAME_MATCH = 500;
+	private static final int WEIGHT_NAME_MATCH = 15000;
 	
 	private static final Logger LOG = Logger.getLogger(GeoNameResolver.class
 			.getName());

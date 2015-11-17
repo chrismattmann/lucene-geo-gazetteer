@@ -149,7 +149,7 @@ public class CustomLuceneGeoGazetteerComparator {
 
 		public static enum FeatureCode {
 			// A country, state, region
-			TERR, PCLI, PCLD, PCLIX, PCLF, PCL, PCLS, ADM1, ADM2, LTER, ADM3, ADM4, ADM5, ADMD, PRSH, ZN, ZNB, PCLH, ADM1H, ADM2H, ADM3H, ADM4H, ADMDH,
+			TERR, PCLI, PCLD, PCLIX, PCLF, PCL, PCLS, ADM1, ADMD, ADM2, LTER, ADM3, ADM4, ADM5, PRSH, ZN, ZNB, PCLH, ADM1H, ADM2H, ADM3H, ADM4H, ADMDH,
 		
 			// P city, village
 			PPLC, PPL, PPLA, PPLA2, PPLA3, PPLA4, STLMT, PPLS, PPLG, PPLF, PPLL, PPLR, PPLX, PPLW, PPLCH, PPLH, PPLQ,
