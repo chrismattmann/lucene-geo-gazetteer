@@ -28,7 +28,13 @@ edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -b allCountries.txt`
 -cp target/lucene-geo-gazetteer-<version>-jar-with-dependencies.jar
 edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -s Pasadena
 Texas`
-
+5. The service mode:
+  ```
+  #Launch Server
+  $ lucene-geo-gazetteer -server
+  # Query
+  $ curl "localhost:8765?q=Bangalore&q=Los+Angeles"
+  ```
 Questions, comments?  
 =================== 
 Send them to [Chris A. Mattmann](mailto:chris.a.mattmann@jpl.nasa.gov).
