@@ -35,12 +35,14 @@ Texas`
   # Query
   $ curl "localhost:8765/api/search?s=Pasadena&s=Texas&c=2"
   ```
+
 Questions, comments?  
 =================== 
 Send them to [Chris A. Mattmann](mailto:chris.a.mattmann@jpl.nasa.gov).
 
 Contributors 
 ============ 
+* Thamme Gowda N., USC
 * Madhav Sharan, USC
 * Yun Li, USC 
 * Chris A. Mattmann, JPL
