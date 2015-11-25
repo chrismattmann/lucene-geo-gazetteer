@@ -33,7 +33,7 @@ Texas`
   #Launch Server
   $ lucene-geo-gazetteer -server
   # Query
-  $ curl "localhost:8765?q=Bangalore&q=Los+Angeles"
+  $ curl "localhost:8765/api/search?s=Pasadena&s=Texas&c=2"
   ```
 Questions, comments?  
 =================== 

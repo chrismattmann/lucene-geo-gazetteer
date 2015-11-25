@@ -17,9 +17,6 @@
 
 package edu.usc.ir.geo.gazetteer;
 
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.File;
@@ -37,6 +34,7 @@ import java.util.PriorityQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import edu.usc.ir.geo.gazetteer.service.Launcher;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -69,11 +67,6 @@ import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
-import org.eclipse.jetty.http.HttpHeader;
-import org.eclipse.jetty.http.HttpStatus;
-import org.eclipse.jetty.server.Request;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.handler.AbstractHandler;
 
 public class GeoNameResolver implements Closeable {
 	/**
@@ -457,61 +450,13 @@ public class GeoNameResolver implements Closeable {
 		}
 	}
 
-	public static class SearchHandler extends AbstractHandler {
-		public static final String Q_PARAM = "q";
-		public static final String COUNT_PARAM = "count";
-
-		private final GeoNameResolver resolver;
-
-		public SearchHandler(GeoNameResolver resolver) {
-			this.resolver = resolver;
-		}
-
-		@Override
-		public void handle(String path, Request request,
-						   HttpServletRequest httpServletRequest,
-						   HttpServletResponse httpServletResponse)
-				throws IOException, ServletException {
-			LOG.log(Level.FINE, "Request :" + path);
-			Map<String, String[]> params = request.getParameterMap();
-			int count = params.containsKey(COUNT_PARAM)
-					? Integer.parseInt(request.getParameter(COUNT_PARAM))
-					: 1;
-			if (params.containsKey(Q_PARAM)){
-				List<String> locationNames = Arrays.asList(params.get(Q_PARAM));
-				HashMap<String, List<String>> result = resolver.searchGeoName(locationNames, count);
-				try (PrintStream out = new PrintStream(httpServletResponse.getOutputStream())) {
-					writeResult(result, out);
-				}
-				httpServletResponse.setStatus(HttpStatus.OK_200);
-				httpServletResponse.setContentType("application/json");
-			} else {
-				httpServletResponse.setStatus(HttpStatus.BAD_REQUEST_400);
-			}
-			request.setHandled(true);
-		}
-	}
-
-	/**
-	 * Launches embedded jetty on the specified port
-	 * @param port port number
-	 * @param geoNameResolver name resolver
-	 * @throws Exception when an error occurs
-     */
-	public static void launchService(int port, GeoNameResolver geoNameResolver) throws Exception {
-		System.out.println("Launching Service on Port : " + port);
-		Server server = new Server(port);
-		server.setHandler(new SearchHandler(geoNameResolver));
-		server.start();
-		server.join();
-	}
-
 	/**
 	 * Writes the result to given PrintStream
 	 * @param resolvedEntities map of resolved entities
 	 * @param out the print stream for writing output
 	 */
-	private static void writeResult(Map<String, List<String>> resolvedEntities, PrintStream out) {
+	public static void writeResult(Map<String, List<String>> resolvedEntities,
+								   PrintStream out) {
 		out.println("[");
 		List<String> keys = (List<String>)(List<?>) Arrays.asList(resolvedEntities.keySet().toArray());
 		//TODO: use org.json.JSONArray and remove this custom formatting code
@@ -621,8 +566,10 @@ public class GeoNameResolver implements Closeable {
 					System.err.println("Index path is required");
 					System.exit(-2);
 				}
+
+				//TODO: get port from CLI args
 				int port = 8765;
-				launchService(port, new GeoNameResolver(indexPath));
+				Launcher.launchService(port, indexPath);
 			} else {
 				System.err.println("Sub command not recognised");
 				System.exit(-1);
