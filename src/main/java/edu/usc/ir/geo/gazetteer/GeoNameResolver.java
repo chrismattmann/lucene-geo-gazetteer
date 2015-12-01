@@ -18,10 +18,12 @@
 package edu.usc.ir.geo.gazetteer;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -32,6 +34,7 @@ import java.util.PriorityQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import edu.usc.ir.geo.gazetteer.service.Launcher;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -65,7 +68,7 @@ import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
 
-public class GeoNameResolver {
+public class GeoNameResolver implements Closeable {
 	/**
 	 * Below constants define name of field in lucene index
 	 */
@@ -86,7 +89,7 @@ public class GeoNameResolver {
 	private static final int WEIGHT_SORT_ORDER = 20;
 	private static final int WEIGHT_SIZE_ALT_NAME = 50;
 	private static final int WEIGHT_NAME_MATCH = 15000;
-	
+
 	private static final Logger LOG = Logger.getLogger(GeoNameResolver.class
 			.getName());
 	private static final Double OUT_OF_BOUNDS = 999999.0;
@@ -95,24 +98,58 @@ public class GeoNameResolver {
 	private static Directory indexDir;
 	private static int hitsPerPage = 8;
 
+	private IndexReader indexReader;
+
+	public GeoNameResolver(){
+	}
+
+	/**
+	 * Creates a GeoNameResolver for given path
+	 * @param indexPath the path to lucene index
+	 * @throws IOException
+	 */
+	public GeoNameResolver(String indexPath) throws IOException {
+		this.indexReader = createIndexReader(indexPath);
+	}
+
+	/**
+	 *
+	 * @param locationNames List of location na,es
+	 * @param count Number of results per location
+	 * @return resolved Geo Names
+	 * @throws IOException
+	 */
+	public HashMap<String, List<String>> searchGeoName(List<String> locationNames,
+													   int count) throws IOException {
+		return resolveEntities(locationNames, count, this.indexReader);
+	}
+
 	/**
 	 * Search corresponding GeoName for each location entity
 	 * @param count
 	 * 			  Number of results for one locations
 	 * @param querystr
 	 *            it's the NER actually
-	 * 
+	 *
 	 * @return HashMap each name has a list of resolved entities
 	 * @throws IOException
 	 * @throws RuntimeException
 	 */
 
-	public HashMap<String, List<String>> searchGeoName(String indexerPath, 
-			List<String> locationNameEntities, int count) throws IOException {
+	public HashMap<String, List<String>> searchGeoName(String indexerPath,
+													   List<String> locationNameEntities, int count) throws IOException {
 
 		if (locationNameEntities.size() == 0
 				|| locationNameEntities.get(0).length() == 0)
 			return new HashMap<String, List<String>>();
+		IndexReader reader = createIndexReader(indexerPath);
+		HashMap<String, List<String>> resolvedEntities = resolveEntities(locationNameEntities, count, reader);
+		reader.close();
+		return resolvedEntities;
+
+	}
+
+	private IndexReader createIndexReader(String indexerPath) throws IOException {
 		File indexfile = new File(indexerPath);
 		indexDir = FSDirectory.open(indexfile.toPath());
 
@@ -123,34 +160,37 @@ public class GeoNameResolver {
 			System.exit(1);
 		}
 
-		IndexReader reader = DirectoryReader.open(indexDir);
+		return DirectoryReader.open(indexDir);
+	}
 
-		if (locationNameEntities.size() >= 200)
+	private HashMap<String, List<String>> resolveEntities(List<String> locationNames,
+														  int count, IndexReader reader) throws IOException {
+		if (locationNames.size() >= 200)
 			hitsPerPage = 5; // avoid heavy computation
 		IndexSearcher searcher = new IndexSearcher(reader);
 		Query q = null;
 
 		HashMap<String, List<List<String>>> allCandidates = new HashMap<String, List<List<String>>>();
 
-		for (String name : locationNameEntities) {
+		for (String name : locationNames) {
 
 			if (!allCandidates.containsKey(name)) {
 				try {
 					//query is wrapped in additional quotes (") to avoid query tokenization on space
 					q = new MultiFieldQueryParser(new String[] { FIELD_NAME_NAME,
 							FIELD_NAME_ALTERNATE_NAMES }, analyzer).parse(String.format("\"%s\"", name) );
-										
+
 					//"feature class" sort order as defined in FeatureClassComparator
 					SortField featureClassSort = CustomLuceneGeoGazetteerComparator.getFeatureClassSortField();
-					
+
 					//"feature code" sort order as defined in FeatureClassComparator
 					SortField featureCodeSort = CustomLuceneGeoGazetteerComparator.getFeatureCodeSortField();
-					
+
 					//sort descending on population
 					SortField populationSort = new SortedNumericSortField(FIELD_NAME_POPULATION, SortField.Type.LONG, true);
-					
+
 					Sort sort = new Sort(featureClassSort, featureCodeSort, populationSort);
-					
+
 					ScoreDoc[] hits = searcher.search(q, hitsPerPage , sort).scoreDocs;
 
 					List<List<String>> topHits = new ArrayList<List<String>>();
@@ -190,10 +230,7 @@ public class GeoNameResolver {
 
 		HashMap<String, List<String>> resolvedEntities = new HashMap<String, List<String>>();
 		pickBestCandidates(resolvedEntities, allCandidates, count);
-		reader.close();
-
 		return resolvedEntities;
-
 	}
 
 	/**
@@ -201,13 +238,13 @@ public class GeoNameResolver {
 	 * choosing from among a list of lists of candidate matches. Filter uses the
 	 * following features: 1) edit distance between name and the resolved name,
 	 * choose smallest one 2) content (haven't implemented)
-	 * 
+	 *
 	 * @param resolvedEntities
 	 *            final result for the input stream
 	 * @param allCandidates
 	 *            each location name may hits several documents, this is the
 	 *            collection for all hitted documents
-	 * @param count 
+	 * @param count
 	 * 			  Number of results for one locations
 	 * @throws IOException
 	 * @throws RuntimeException
@@ -218,11 +255,11 @@ public class GeoNameResolver {
 			HashMap<String, List<List<String>>> allCandidates, int count) {
 
 		for (String extractedName : allCandidates.keySet()) {
-			
+
 			List<List<String>> cur = allCandidates.get(extractedName);
 			if(cur.isEmpty())
 				continue;//continue if no results found
-			
+
 			int maxWeight = Integer.MIN_VALUE ;
 			//In case weight is equal for all return top element
 			int bestIndex = 0;
@@ -239,9 +276,9 @@ public class GeoNameResolver {
 				// get cur's ith resolved entry's name
 				String resolvedName = cur.get(i).get(0);
 				//Assign a weight as per configuration if extracted name is found in name
-				weight = resolvedName.contains(extractedName) ? WEIGHT_NAME_MATCH : 0;  
-				
-				// get all alternate names of cur's ith resolved entry's 
+				weight = resolvedName.contains(extractedName) ? WEIGHT_NAME_MATCH : 0;
+
+				// get all alternate names of cur's ith resolved entry's
 				String[] altNames = cur.get(i).get(3).split(",");
 				float altEditDist = 0;
 				for(String altName : altNames){
@@ -251,34 +288,34 @@ public class GeoNameResolver {
 				}
 				//lesser the edit distance more should be the weight
 				weight += getCalibratedWeight(altNames.length, altEditDist);
-				
+
 				//Give preference to sorted results. 0th result should have more priority
 				weight += (cur.size()-i) * WEIGHT_SORT_ORDER;
-				
+
 				cur.get(i).add(Integer.toString(weight));
-						
+
 				if (weight > maxWeight) {
 					maxWeight = weight;
 					bestIndex = i;
 				}
-				
+
 				pq.add(cur.get(i)) ;
 			}
 			if (bestIndex == -1)
 				continue;
-			
+
 			List<String> resultList = new ArrayList<>();
-			
+
 			for(int i =0 ; i< count && !pq.isEmpty() ; i++){
 				List<String> result = pq.poll();
 				//remove weight from allCandidates element before adding
 				result.remove(7);
 				//remove alternate name from allCandidates element before adding
 				result.remove(3);
-				
+
 				resultList.addAll(result);
 			}
-			
+
 			resolvedEntities.put(extractedName, resultList);
 		}
 	}
@@ -286,20 +323,20 @@ public class GeoNameResolver {
 	/**
 	 * Returns a weight for average edit distance for set of alternate name<br/><br/>
 	 * altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;<br/><br/>
-	 * altNamesSize * WEIGHT_SIZE_ALT_NAME ensure more priority for results with more alternate names.<br/> 
+	 * altNamesSize * WEIGHT_SIZE_ALT_NAME ensure more priority for results with more alternate names.<br/>
 	 * altEditDist/altNamesSize is average edit distance. <br/>
 	 * Lesser the average, higher the over all expression
 	 * @param altNamesSize - Count of altNames
 	 * @param altEditDist - sum of individual edit distances
 	 * @return
 	 */
-	public float getCalibratedWeight(int altNamesSize, float altEditDist) { 
+	public float getCalibratedWeight(int altNamesSize, float altEditDist) {
 		return altNamesSize * WEIGHT_SIZE_ALT_NAME - (altEditDist/altNamesSize) ;
 	}
 
 	/**
 	 * Build the gazetteer index line by line
-	 * 
+	 *
 	 * @param gazetteerPath
 	 *            path of the gazetteer file
 	 * @param indexerPath
@@ -342,7 +379,7 @@ public class GeoNameResolver {
 
 	/**
 	 * Index gazetteer's one line data by built-in Lucene Index functions
-	 * 
+	 *
 	 * @param indexWriter
 	 *            Lucene indexWriter to be loaded
 	 * @param line
@@ -404,10 +441,49 @@ public class GeoNameResolver {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-
 	}
 
-	public static void main(String[] args) throws IOException {
+	@Override
+	public void close() throws IOException {
+		if (indexReader != null) {
+			this.indexReader.close();
+		}
+	}
+
+	/**
+	 * Writes the result to given PrintStream
+	 * @param resolvedEntities map of resolved entities
+	 * @param out the print stream for writing output
+	 */
+	public static void writeResult(Map<String, List<String>> resolvedEntities,
+								   PrintStream out) {
+		out.println("[");
+		List<String> keys = (List<String>)(List<?>) Arrays.asList(resolvedEntities.keySet().toArray());
+		//TODO: use org.json.JSONArray and remove this custom formatting code
+		for (int j=0; j < keys.size(); j++) {
+			String n = keys.get(j);
+			out.println("{\"" + n + "\" : [");
+			List<String> terms = resolvedEntities.get(n);
+			for (int i = 0; i < terms.size(); i++) {
+				String res = terms.get(i);
+				if (i < terms.size() - 1) {
+					out.println("\"" + res + "\",");
+				} else {
+					out.println("\"" + res + "\"");
+				}
+			}
+
+			if (j < keys.size() -1){
+				out.println("]},");
+			}
+			else{
+				out.println("]}");
+			}
+		}
+		out.println("]");
+	}
+
+	public static void main(String[] args) throws Exception {
 		Option buildOpt = OptionBuilder.withArgName("gazetteer file").hasArg().withLongOpt("build")
 				.withDescription("The Path to the Geonames allCountries.txt")
 				.create('b');
@@ -426,20 +502,25 @@ public class GeoNameResolver {
 
 		Option helpOpt = OptionBuilder.withLongOpt("help")
 				.withDescription("Print this message.").create('h');
-		
+
 		Option resultCountOpt = OptionBuilder.withArgName("number of results").withLongOpt("count").hasArgs()
 				.withDescription("Number of best results to be returned for one location").withType(Integer.class)
 				.create('c');
 
+		Option serverOption = OptionBuilder.withArgName("Launch Server")
+				.withLongOpt("server")
+				.withDescription("Launches Geo Gazetteer Service")
+				.create("server");
+
 		String indexPath = null;
 		String gazetteerPath = null;
-		List<String> geoTerms = null;
 		Options options = new Options();
 		options.addOption(buildOpt);
 		options.addOption(searchOpt);
 		options.addOption(indexOpt);
 		options.addOption(helpOpt);
 		options.addOption(resultCountOpt);
+		options.addOption(serverOption);
 
 		// create the parser
 		CommandLineParser parser = new DefaultParser();
@@ -470,7 +551,7 @@ public class GeoNameResolver {
 			}
 
 			if (line.hasOption("search")) {
-				geoTerms = new ArrayList<String>(Arrays.asList(line
+				List<String> geoTerms = new ArrayList<String>(Arrays.asList(line
 						.getOptionValues("search")));
 				String countStr = line.getOptionValue("count", "1");
 				int count = 1;
@@ -479,29 +560,19 @@ public class GeoNameResolver {
 
 				Map<String, List<String>> resolved = resolver
 						.searchGeoName(indexPath, geoTerms, count);
-				System.out.println("[");
-				List<String> keys = (List<String>)(List<?>)Arrays.asList(resolved.keySet().toArray());
-				for (int j=0; j < keys.size(); j++) {
-					String n = keys.get(j);
-					System.out.println("{\"" + n + "\" : [");
-					List<String> terms = resolved.get(n);
-					for (int i = 0; i < terms.size(); i++) {
-						String res = terms.get(i);
-						if (i < terms.size() - 1) {
-							System.out.println("\"" + res + "\",");
-						} else {
-							System.out.println("\"" + res + "\"");
-						}
-					}
-					
-					if (j < keys.size() -1){
-						System.out.println("]},");						
-					}
-					else{
-						System.out.println("]}");
-					}
+				writeResult(resolved, System.out);
+			} else if (line.hasOption("server")){
+				if (indexPath == null) {
+					System.err.println("Index path is required");
+					System.exit(-2);
 				}
-				System.out.println("]");
+
+				//TODO: get port from CLI args
+				int port = 8765;
+				Launcher.launchService(port, indexPath);
+			} else {
+				System.err.println("Sub command not recognised");
+				System.exit(-1);
 			}
 
 		} catch (ParseException exp) {
