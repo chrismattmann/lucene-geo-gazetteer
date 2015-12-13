@@ -35,6 +35,14 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import edu.usc.ir.geo.gazetteer.service.Launcher;
+import org.apache.commons.cli.CommandLine;
+import org.apache.commons.cli.CommandLineParser;
+import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.HelpFormatter;
+import org.apache.commons.cli.Option;
+import org.apache.commons.cli.OptionBuilder;
+import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
@@ -59,9 +67,6 @@ import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 import org.apache.lucene.util.BytesRef;
-import org.kohsuke.args4j.CmdLineException;
-import org.kohsuke.args4j.CmdLineParser;
-import org.kohsuke.args4j.Option;
 
 public class GeoNameResolver implements Closeable {
 	/**
@@ -95,35 +100,6 @@ public class GeoNameResolver implements Closeable {
 
 	private IndexReader indexReader;
 
-	@Option(name = "-b", aliases = {"--build"}, forbids = {"-s", "-server"},
-			usage = "The Path to the Geonames allCountries.txt")
-	private File gazetteerFile;
-
-	@Option(name = "-i", aliases = {"--index"},
-			usage = "The path to the Lucene index directory to either create or read")
-	private File indexDirectory;
-
-	@Option(name = "-s", aliases = {"--search"}, forbids = {"-b", "-server"},
-			usage = "Location names to search the Gazetteer for")
-	private List<String> geoNames;
-
-	@Option(name = "-c", aliases = {"--count"}, depends = "-s",
-			usage = "Number of best results to be returned for one location")
-	private int count = 1;
-
-	@Option(name = "-server", aliases = {"--server"},
-			usage = "Launches Geo Gazetteer Service")
-	private boolean launchServer;
-
-	@Option(name="-p", aliases = {"--port"}, depends = "-server",
-			usage = "Port number for launching service")
-	private int port = 8765;
-
-	@Option(name="-h", aliases = {"--help"},
-			usage = "Show help message")
-	private boolean showHelp;
-
-
 	public GeoNameResolver(){
 	}
 
@@ -145,9 +121,6 @@ public class GeoNameResolver implements Closeable {
 	 */
 	public HashMap<String, List<String>> searchGeoName(List<String> locationNames,
 													   int count) throws IOException {
-		if (this.indexReader == null) {
-			this.indexReader = createIndexReader(this.indexDirectory.getPath());
-		}
 		return resolveEntities(locationNames, count, this.indexReader);
 	}
 
@@ -164,15 +137,13 @@ public class GeoNameResolver implements Closeable {
 	 */
 
 	public HashMap<String, List<String>> searchGeoName(String indexerPath,
-													   List<String> locationNameEntities,
-													   int count) throws IOException {
+													   List<String> locationNameEntities, int count) throws IOException {
 
 		if (locationNameEntities.size() == 0
 				|| locationNameEntities.get(0).length() == 0)
 			return new HashMap<String, List<String>>();
 		IndexReader reader = createIndexReader(indexerPath);
-		HashMap<String, List<String>> resolvedEntities =
-				resolveEntities(locationNameEntities, count, reader);
+		HashMap<String, List<String>> resolvedEntities = resolveEntities(locationNameEntities, count, reader);
 		reader.close();
 		return resolvedEntities;
 
@@ -366,12 +337,16 @@ public class GeoNameResolver implements Closeable {
 	/**
 	 * Build the gazetteer index line by line
 	 *
+	 * @param gazetteerPath
+	 *            path of the gazetteer file
+	 * @param indexerPath
+	 *            path to the created Lucene index directory.
 	 * @throws IOException
 	 * @throws RuntimeException
 	 */
-	public void buildIndex()
+	public void buildIndex(String gazetteerPath, String indexerPath)
 			throws IOException {
-		File indexfile = indexDirectory;
+		File indexfile = new File(indexerPath);
 		indexDir = FSDirectory.open(indexfile.toPath());
 		if (!DirectoryReader.indexExists(indexDir)) {
 			IndexWriterConfig config = new IndexWriterConfig(analyzer);
@@ -379,7 +354,7 @@ public class GeoNameResolver implements Closeable {
 			Logger logger = Logger.getLogger(this.getClass().getName());
 			logger.log(Level.WARNING, "Start Building Index for Gazatteer");
 			BufferedReader filereader = new BufferedReader(
-					new InputStreamReader(new FileInputStream(gazetteerFile),
+					new InputStreamReader(new FileInputStream(gazetteerPath),
 							"UTF-8"));
 			String line;
 			int count = 0;
@@ -508,41 +483,101 @@ public class GeoNameResolver implements Closeable {
 		out.println("]");
 	}
 
-
 	public static void main(String[] args) throws Exception {
-		GeoNameResolver resolver = new GeoNameResolver();
-		CmdLineParser parser = new CmdLineParser(resolver);
-		try {
-			parser.parseArgument(args);
-			if (resolver.showHelp) {
-				System.out.println("lucene-geo-gazetteer \t");
-				parser.printUsage(System.out);
-				// Tika's geo parser uses this exit status to verify availability.
-				//FIXME, Not all runtimes supports negative statuses
-				System.exit(-1);
-				return;
-			}
-		} catch (CmdLineException e){
-			System.err.println(e.getMessage());
-			parser.printUsage(System.err);
-			System.exit(2);
-		}
-		if (resolver.indexDirectory != null && resolver.gazetteerFile != null) {
-			LOG.info("Building Lucene index at path: [" + resolver.indexDirectory
-					+ "] with geoNames.org file: [" + resolver.gazetteerFile + "]");
-			resolver.buildIndex();
-		}
+		Option buildOpt = OptionBuilder.withArgName("gazetteer file").hasArg().withLongOpt("build")
+				.withDescription("The Path to the Geonames allCountries.txt")
+				.create('b');
 
-		if (resolver.geoNames != null && !resolver.geoNames.isEmpty()) {
-			Map<String, List<String>> resolved = resolver
-					.searchGeoName(resolver.geoNames, resolver.count);
-			writeResult(resolved, System.out);
-		} else if (resolver.launchServer){
-			Launcher.launchService(resolver.port,
-					resolver.indexDirectory.getAbsolutePath());
-		} else {
-			System.err.println("Sub command not recognised");
-			System.exit(3);
+		Option searchOpt = OptionBuilder.withArgName("set of location names").withLongOpt("search").hasArgs()
+				.withDescription("Location names to search the Gazetteer for")
+				.create('s');
+
+		Option indexOpt = OptionBuilder
+				.withArgName("directoryPath")
+				.withLongOpt("index")
+				.hasArgs()
+				.withDescription(
+						"The path to the Lucene index directory to either create or read")
+				.create('i');
+
+		Option helpOpt = OptionBuilder.withLongOpt("help")
+				.withDescription("Print this message.").create('h');
+
+		Option resultCountOpt = OptionBuilder.withArgName("number of results").withLongOpt("count").hasArgs()
+				.withDescription("Number of best results to be returned for one location").withType(Integer.class)
+				.create('c');
+
+		Option serverOption = OptionBuilder.withArgName("Launch Server")
+				.withLongOpt("server")
+				.withDescription("Launches Geo Gazetteer Service")
+				.create("server");
+
+		String indexPath = null;
+		String gazetteerPath = null;
+		Options options = new Options();
+		options.addOption(buildOpt);
+		options.addOption(searchOpt);
+		options.addOption(indexOpt);
+		options.addOption(helpOpt);
+		options.addOption(resultCountOpt);
+		options.addOption(serverOption);
+
+		// create the parser
+		CommandLineParser parser = new DefaultParser();
+		GeoNameResolver resolver = new GeoNameResolver();
+
+		try {
+			// parse the command line arguments
+			CommandLine line = parser.parse(options, args);
+
+			if (line.hasOption("index")) {
+				indexPath = line.getOptionValue("index");
+			}
+
+			if (line.hasOption("build")) {
+				gazetteerPath = line.getOptionValue("build");
+			}
+
+			if (line.hasOption("help")) {
+				HelpFormatter formatter = new HelpFormatter();
+				formatter.printHelp("lucene-geo-gazetteer", options);
+				System.exit(1);
+			}
+
+			if (indexPath != null && gazetteerPath != null) {
+				LOG.info("Building Lucene index at path: [" + indexPath
+						+ "] with geoNames.org file: [" + gazetteerPath + "]");
+				resolver.buildIndex(gazetteerPath, indexPath);
+			}
+
+			if (line.hasOption("search")) {
+				List<String> geoTerms = new ArrayList<String>(Arrays.asList(line
+						.getOptionValues("search")));
+				String countStr = line.getOptionValue("count", "1");
+				int count = 1;
+				if (countStr.matches("\\d+"))
+					count = Integer.parseInt(countStr);
+
+				Map<String, List<String>> resolved = resolver
+						.searchGeoName(indexPath, geoTerms, count);
+				writeResult(resolved, System.out);
+			} else if (line.hasOption("server")){
+				if (indexPath == null) {
+					System.err.println("Index path is required");
+					System.exit(-2);
+				}
+
+				//TODO: get port from CLI args
+				int port = 8765;
+				Launcher.launchService(port, indexPath);
+			} else {
+				System.err.println("Sub command not recognised");
+				System.exit(-1);
+			}
+
+		} catch (ParseException exp) {
+			// oops, something went wrong
+			System.err.println("Parsing failed.  Reason: " + exp.getMessage());
 		}
 	}
 
