@@ -34,6 +34,7 @@ import java.util.PriorityQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import edu.usc.ir.geo.gazetteer.domain.Location;
 import edu.usc.ir.geo.gazetteer.service.Launcher;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
@@ -46,7 +47,6 @@ import org.apache.commons.cli.ParseException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.standard.StandardAnalyzer;
-import org.apache.lucene.document.BinaryDocValuesField;
 import org.apache.lucene.document.Document;
 import org.apache.lucene.document.DoubleField;
 import org.apache.lucene.document.Field;
@@ -66,9 +66,11 @@ import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
-import org.apache.lucene.util.BytesRef;
+
+import com.google.gson.Gson;
 
 public class GeoNameResolver implements Closeable {
+	private static final String JSON_OPT = "json";
 	/**
 	 * Below constants define name of field in lucene index
 	 */
@@ -77,7 +79,6 @@ public class GeoNameResolver implements Closeable {
 	public static final String FIELD_NAME_LONGITUDE = "longitude";
 	public static final String FIELD_NAME_LATITUDE = "latitude";
 	public static final String FIELD_NAME_ALTERNATE_NAMES = "alternatenames";
-	public static final String FIELD_NAME_FEATURE_CLASS = "featureClass";
 	public static final String FIELD_NAME_FEATURE_CODE = "featureCode";
 	public static final String FIELD_NAME_COUNTRY_CODE = "countryCode";
 	public static final String FIELD_NAME_ADMIN1_CODE = "admin1Code";
@@ -88,7 +89,8 @@ public class GeoNameResolver implements Closeable {
 	 */
 	private static final int WEIGHT_SORT_ORDER = 20;
 	private static final int WEIGHT_SIZE_ALT_NAME = 50;
-	private static final int WEIGHT_NAME_MATCH = 15000;
+	private static final int WEIGHT_NAME_MATCH = 20000;
+	private static final int WEIGHT_NAME_PART_MATCH = 15000;
 
 	private static final Logger LOG = Logger.getLogger(GeoNameResolver.class
 			.getName());
@@ -119,7 +121,7 @@ public class GeoNameResolver implements Closeable {
 	 * @return resolved Geo Names
 	 * @throws IOException
 	 */
-	public HashMap<String, List<String>> searchGeoName(List<String> locationNames,
+	public HashMap<String, List<Location>> searchGeoName(List<String> locationNames,
 													   int count) throws IOException {
 		return resolveEntities(locationNames, count, this.indexReader);
 	}
@@ -136,14 +138,16 @@ public class GeoNameResolver implements Closeable {
 	 * @throws RuntimeException
 	 */
 
-	public HashMap<String, List<String>> searchGeoName(String indexerPath,
-													   List<String> locationNameEntities, int count) throws IOException {
+	public HashMap<String, List<Location>> searchGeoName(String indexerPath,
+													   List<String> locationNameEntities,
+													   int count) throws IOException {
 
 		if (locationNameEntities.size() == 0
 				|| locationNameEntities.get(0).length() == 0)
-			return new HashMap<String, List<String>>();
+			return new HashMap<String, List<Location>>();
 		IndexReader reader = createIndexReader(indexerPath);
-		HashMap<String, List<String>> resolvedEntities = resolveEntities(locationNameEntities, count, reader);
+		HashMap<String, List<Location>> resolvedEntities =
+				resolveEntities(locationNameEntities, count, reader);
 		reader.close();
 		return resolvedEntities;
 
@@ -163,14 +167,14 @@ public class GeoNameResolver implements Closeable {
 		return DirectoryReader.open(indexDir);
 	}
 
-	private HashMap<String, List<String>> resolveEntities(List<String> locationNames,
+	private HashMap<String, List<Location>> resolveEntities(List<String> locationNames,
 														  int count, IndexReader reader) throws IOException {
 		if (locationNames.size() >= 200)
 			hitsPerPage = 5; // avoid heavy computation
 		IndexSearcher searcher = new IndexSearcher(reader);
 		Query q = null;
 
-		HashMap<String, List<List<String>>> allCandidates = new HashMap<String, List<List<String>>>();
+		HashMap<String, List<Location>> allCandidates = new HashMap<String, List<Location>>();
 
 		for (String name : locationNames) {
 
@@ -180,57 +184,67 @@ public class GeoNameResolver implements Closeable {
 					q = new MultiFieldQueryParser(new String[] { FIELD_NAME_NAME,
 							FIELD_NAME_ALTERNATE_NAMES }, analyzer).parse(String.format("\"%s\"", name) );
 
-					//"feature class" sort order as defined in FeatureClassComparator
-					SortField featureClassSort = CustomLuceneGeoGazetteerComparator.getFeatureClassSortField();
-
-					//"feature code" sort order as defined in FeatureClassComparator
-					SortField featureCodeSort = CustomLuceneGeoGazetteerComparator.getFeatureCodeSortField();
-
 					//sort descending on population
 					SortField populationSort = new SortedNumericSortField(FIELD_NAME_POPULATION, SortField.Type.LONG, true);
 
-					Sort sort = new Sort(featureClassSort, featureCodeSort, populationSort);
+					Sort sort = new Sort(populationSort);
+					//Fetch 3 times desired values, these will be sorted on code and only desired number will be kept
+					ScoreDoc[] hits = searcher.search(q, hitsPerPage * 3 , sort).scoreDocs;
 
-					ScoreDoc[] hits = searcher.search(q, hitsPerPage , sort).scoreDocs;
-
-					List<List<String>> topHits = new ArrayList<List<String>>();
+					List<Location> topHits = new ArrayList<Location>();
 
 					for (int i = 0; i < hits.length; ++i) {
-						ArrayList<String> tmp1 = new ArrayList<String>();
+						Location tmpLocObj = new Location();
 
 						int docId = hits[i].doc;
 						Document d;
 						try {
 							d = searcher.doc(docId);
-							tmp1.add(d.get(FIELD_NAME_NAME));
-							tmp1.add(d.get(FIELD_NAME_LONGITUDE));
-							tmp1.add(d.get(FIELD_NAME_LATITUDE));
+							tmpLocObj.setName(d.get(FIELD_NAME_NAME));
+							tmpLocObj.setLongitude(d.get(FIELD_NAME_LONGITUDE));
+							tmpLocObj.setLatitude(d.get(FIELD_NAME_LATITUDE));
 							//If alternate names are empty put name as actual name
 							//This covers missing data and equals weight for later computation
 							if (d.get(FIELD_NAME_ALTERNATE_NAMES).isEmpty()){
-								tmp1.add(d.get(FIELD_NAME_NAME));
+								tmpLocObj.setAlternateNames(d.get(FIELD_NAME_NAME));
 							}else{
-								tmp1.add(d.get(FIELD_NAME_ALTERNATE_NAMES));
+								tmpLocObj.setAlternateNames(d.get(FIELD_NAME_ALTERNATE_NAMES));
 							}
-							tmp1.add(d.get(FIELD_NAME_COUNTRY_CODE));
-							tmp1.add(d.get(FIELD_NAME_ADMIN1_CODE));
-							tmp1.add(d.get(FIELD_NAME_ADMIN2_CODE));
+							tmpLocObj.setCountryCode(d.get(FIELD_NAME_COUNTRY_CODE));
+							tmpLocObj.setAdmin1Code(d.get(FIELD_NAME_ADMIN1_CODE));
+							tmpLocObj.setAdmin2Code(d.get(FIELD_NAME_ADMIN2_CODE));
+							tmpLocObj.setFeatureCode(d.get(FIELD_NAME_FEATURE_CODE));
 
 						} catch (IOException e) {
 							e.printStackTrace();
 						}
-						topHits.add(tmp1);
+						topHits.add(tmpLocObj);
 					}
-					allCandidates.put(name, topHits);
+					//Picking hitsPerPage number of locations from feature code sorted list 
+					allCandidates.put(name, pickTopSortedByCode(topHits,hitsPerPage));
 				} catch (org.apache.lucene.queryparser.classic.ParseException e) {
 					e.printStackTrace();
 				}
 			}
 		}
 
-		HashMap<String, List<String>> resolvedEntities = new HashMap<String, List<String>>();
+		HashMap<String, List<Location>> resolvedEntities = new HashMap<String, List<Location>>();
 		pickBestCandidates(resolvedEntities, allCandidates, count);
 		return resolvedEntities;
+	}
+	
+	/**
+	 * Sorts inputLocations as per FeatureCodeComparator and returns at most topCount locations 
+	 * @param inputLocations List of locations to be sorted
+	 * @param topCount Number of locations to be kept in curtailed list
+	 * @return List of at most topCount locations sorted by edu.usc.ir.geo.gazetteer.CustomLuceneGeoGazetteerComparator.FeatureCodeComparator 
+	 */
+	private List<Location> pickTopSortedByCode(List<Location> inputLocations, int topCount) {
+		if(inputLocations == null || inputLocations.size()==0){
+			return new ArrayList<>();
+		}
+		inputLocations.sort(new CustomLuceneGeoGazetteerComparator.FeatureCodeComparator());
+		return inputLocations.subList(0, inputLocations.size() > topCount ? topCount : inputLocations.size() - 1);
 	}
 
 	/**
@@ -251,12 +265,12 @@ public class GeoNameResolver implements Closeable {
 	 */
 
 	private void pickBestCandidates(
-			HashMap<String, List<String>> resolvedEntities,
-			HashMap<String, List<List<String>>> allCandidates, int count) {
+			HashMap<String, List<Location>> resolvedEntities,
+			HashMap<String, List<Location>> allCandidates, int count) {
 
 		for (String extractedName : allCandidates.keySet()) {
 
-			List<List<String>> cur = allCandidates.get(extractedName);
+			List<Location> cur = allCandidates.get(extractedName);
 			if(cur.isEmpty())
 				continue;//continue if no results found
 
@@ -264,22 +278,26 @@ public class GeoNameResolver implements Closeable {
 			//In case weight is equal for all return top element
 			int bestIndex = 0;
 			//Priority queue to return top elements
-			PriorityQueue<List<String>> pq = new PriorityQueue<>(cur.size(), new Comparator<List<String>>() {
+			PriorityQueue<Location> pq = new PriorityQueue<>(cur.size(), new Comparator<Location>() {
 				@Override
-				public int compare(List<String> o1, List<String> o2) {
-					return Integer.compare(Integer.parseInt(o2.get(7)), Integer.parseInt(o1.get(7)));
+				public int compare(Location o1, Location o2) {
+					return Integer.compare(o2.getWeight(), o1.getWeight());
 				}
 			});
 
 			for (int i = 0; i < cur.size(); ++i) {
-				int weight;
+				int weight = 0;
 				// get cur's ith resolved entry's name
-				String resolvedName = cur.get(i).get(0);
-				//Assign a weight as per configuration if extracted name is found in name
-				weight = resolvedName.contains(extractedName) ? WEIGHT_NAME_MATCH : 0;
-
+				String resolvedName = String.format(" %s ", cur.get(i).getName());
+				if (resolvedName.contains(String.format(" %s ", extractedName))) {
+					// Assign a weight as per configuration if extracted name is found as a exact word in name
+					weight = WEIGHT_NAME_MATCH;
+				} else if (resolvedName.contains(extractedName)) {
+					// Assign a weight as per configuration if extracted name is found partly in name
+					weight = WEIGHT_NAME_PART_MATCH;
+				}
 				// get all alternate names of cur's ith resolved entry's
-				String[] altNames = cur.get(i).get(3).split(",");
+				String[] altNames = cur.get(i).getAlternateNames().split(",");
 				float altEditDist = 0;
 				for(String altName : altNames){
 					if(altName.contains(extractedName)){
@@ -292,7 +310,7 @@ public class GeoNameResolver implements Closeable {
 				//Give preference to sorted results. 0th result should have more priority
 				weight += (cur.size()-i) * WEIGHT_SORT_ORDER;
 
-				cur.get(i).add(Integer.toString(weight));
+				cur.get(i).setWeight(weight);
 
 				if (weight > maxWeight) {
 					maxWeight = weight;
@@ -304,16 +322,10 @@ public class GeoNameResolver implements Closeable {
 			if (bestIndex == -1)
 				continue;
 
-			List<String> resultList = new ArrayList<>();
+			List<Location> resultList = new ArrayList<>();
 
 			for(int i =0 ; i< count && !pq.isEmpty() ; i++){
-				List<String> result = pq.poll();
-				//remove weight from allCandidates element before adding
-				result.remove(7);
-				//remove alternate name from allCandidates element before adding
-				result.remove(3);
-
-				resultList.addAll(result);
+				resultList.add(pq.poll());
 			}
 
 			resolvedEntities.put(extractedName, resultList);
@@ -416,7 +428,6 @@ public class GeoNameResolver implements Closeable {
 
 		// Additional fields to rank more known locations higher
 		// All available codes can be viewed on www.geonames.org
-		String featureClass = tokens[6];// broad category of location
 		String featureCode = tokens[7];// more granular category
 		String countryCode = tokens[8];
 		String admin1Code = tokens[10];// eg US State
@@ -428,8 +439,7 @@ public class GeoNameResolver implements Closeable {
 		doc.add(new DoubleField(FIELD_NAME_LONGITUDE, longitude, Field.Store.YES));
 		doc.add(new DoubleField(FIELD_NAME_LATITUDE, latitude, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ALTERNATE_NAMES, alternatenames, Field.Store.YES));
-		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CLASS, new BytesRef(featureClass.getBytes())) );//sort enabled field
-		doc.add(new BinaryDocValuesField(FIELD_NAME_FEATURE_CODE, new BytesRef(featureCode.getBytes())) );//sort enabled field
+		doc.add(new TextField(FIELD_NAME_FEATURE_CODE, featureCode, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_COUNTRY_CODE, countryCode, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ADMIN1_CODE, admin1Code, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ADMIN2_CODE, admin2Code, Field.Store.YES));
@@ -449,13 +459,24 @@ public class GeoNameResolver implements Closeable {
 			this.indexReader.close();
 		}
 	}
-
 	/**
-	 * Writes the result to given PrintStream
+	 * Writes the result as formatted json to given PrintStream 
 	 * @param resolvedEntities map of resolved entities
 	 * @param out the print stream for writing output
 	 */
-	public static void writeResult(Map<String, List<String>> resolvedEntities,
+	public static void writeResultJson(Map<String, List<Location>> resolvedEntities,
+			   PrintStream out) {
+		out.println(new Gson().toJson(resolvedEntities) );
+	}
+	
+	/**
+	 * Writes the result to given PrintStream
+	 * @deprecated Use writeResultJson instead 
+	 * @param resolvedEntities map of resolved entities
+	 * @param out the print stream for writing output
+	 */
+	@Deprecated
+	public static void writeResult(Map<String, List<Location>> resolvedEntities,
 								   PrintStream out) {
 		out.println("[");
 		List<String> keys = (List<String>)(List<?>) Arrays.asList(resolvedEntities.keySet().toArray());
@@ -463,13 +484,13 @@ public class GeoNameResolver implements Closeable {
 		for (int j=0; j < keys.size(); j++) {
 			String n = keys.get(j);
 			out.println("{\"" + n + "\" : [");
-			List<String> terms = resolvedEntities.get(n);
+			List<Location> terms = resolvedEntities.get(n);
 			for (int i = 0; i < terms.size(); i++) {
-				String res = terms.get(i);
+				Location res = terms.get(i);
 				if (i < terms.size() - 1) {
-					out.println("\"" + res + "\",");
+					out.println(res + ",");
 				} else {
-					out.println("\"" + res + "\"");
+					out.println(res);
 				}
 			}
 
@@ -512,6 +533,11 @@ public class GeoNameResolver implements Closeable {
 				.withDescription("Launches Geo Gazetteer Service")
 				.create("server");
 
+		Option jsonOption = OptionBuilder.withArgName("outputs json")
+				.withLongOpt(JSON_OPT)
+				.withDescription("Formats output in well defined json structure")
+				.create(JSON_OPT);
+
 		String indexPath = null;
 		String gazetteerPath = null;
 		Options options = new Options();
@@ -521,6 +547,7 @@ public class GeoNameResolver implements Closeable {
 		options.addOption(helpOpt);
 		options.addOption(resultCountOpt);
 		options.addOption(serverOption);
+		options.addOption(jsonOption);
 
 		// create the parser
 		CommandLineParser parser = new DefaultParser();
@@ -558,9 +585,13 @@ public class GeoNameResolver implements Closeable {
 				if (countStr.matches("\\d+"))
 					count = Integer.parseInt(countStr);
 
-				Map<String, List<String>> resolved = resolver
+				Map<String, List<Location>> resolved = resolver
 						.searchGeoName(indexPath, geoTerms, count);
-				writeResult(resolved, System.out);
+				if(line.hasOption(JSON_OPT)){
+					writeResultJson(resolved, System.out);
+				}else{
+					writeResult(resolved, System.out);
+				}
 			} else if (line.hasOption("server")){
 				if (indexPath == null) {
 					System.err.println("Index path is required");
