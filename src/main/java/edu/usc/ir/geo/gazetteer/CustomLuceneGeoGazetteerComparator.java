@@ -17,84 +17,17 @@
 
 package edu.usc.ir.geo.gazetteer;
 
-import java.io.IOException;
-import java.util.logging.Logger;
+import java.util.Comparator;
 
 import org.apache.commons.lang3.EnumUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.lucene.search.FieldComparator;
-import org.apache.lucene.search.FieldComparatorSource;
-import org.apache.lucene.search.SortField;
-import org.apache.lucene.util.BytesRef;
+
+import edu.usc.ir.geo.gazetteer.domain.Location;
 
 /**
  * Custom FieldComparatorSource for indexed GeoNames data set
  */
 public class CustomLuceneGeoGazetteerComparator {
-	private static final Logger LOG = Logger.getLogger(CustomLuceneGeoGazetteerComparator.class.getName());
-
-	/**
-	 * Defines custom sort order for "feature class" field. <br/>
-	 * Current proposed sort order is -> A P S T L H R V U <br/>
-	 * 
-	 */
-	static class FeatureClassComparator extends FieldComparatorSource {
-
-		/**
-		 * All FeatureClass present in GeoName data set.<br/>
-		 *  A country, state, region <br/>
-		 *  H stream, lake <br/>
-		 *  L parks,area <br/>
-		 *  P city, village <br/>
-		 *  R road, railroad <br/>
-		 *  S spot, building, farm  <br/>
-		 *  T mountain,hill,rock <br/> 
-		 *  U undersea  <br/>
-		 *  V forest,heath <br/>
-		 */
-		public static enum FeatureClass {
-			A, P, S, T, L, H, R, V, U;
-
-			public static boolean exists(String val) {
-				return EnumUtils.isValidEnum(FeatureClass.class, val);
-			}
-		}
-
-		@Override
-		public FieldComparator<BytesRef> newComparator(final String fieldName, final int numHits, final int sortPos,
-				boolean reversed) throws IOException {
-			// This Comparator is only meant for "feature class" field.
-			if (!GeoNameResolver.FIELD_NAME_FEATURE_CLASS.equals(fieldName)) {
-				throw new RuntimeException(
-						"FeatureClassComparatorSource is not supposed to run on any other field apart from "
-								+ GeoNameResolver.FIELD_NAME_FEATURE_CLASS);
-			}
-
-			return new FieldComparator.TermValComparator(numHits, fieldName, reversed) {
-
-				public int compareValues(BytesRef val1, BytesRef val2) {
-					String val1String = StringUtils.trim(new String(val1.bytes));
-					String val2String = StringUtils.trim(new String(val2.bytes));
-
-					int res;
-					try {
-						res = FeatureClass.valueOf(val1String).compareTo(FeatureClass.valueOf(val2String));
-					} catch (IllegalArgumentException e) {
-						// If feature code is not present in Enum return 0.
-						// This is to safeguard from future changes in GeoNames data set
-						LOG.warning(e.getMessage());
-						
-						// give higher rank to values present in enum
-						//if enum is present it's treated as smaller than other
-						res = !FeatureClass.exists(val1String) ? !FeatureClass.exists(val2String) ? 0 : 1000 : -1000;
-					}
-
-					return res;
-
-				}
-			};
-		}
-	}
 
 	/**
 	 * Defines custom sort order for "feature code" field. <br/>
@@ -102,7 +35,7 @@ public class CustomLuceneGeoGazetteerComparator {
 	 * http://www.geonames.org/export/codes.html
 	 * <br/><br/>
 	 * Class - A<br/>
-	 * ADM1 - first-order administrative division<br/>
+	 * ADM1 - first-order administrative division<br/> State
 	 * ADM1H - historical first-order administrative division<br/>
 	 * ADM2 - second-order administrative division<br/>
 	 * ADM2H - historical second-order administrative division<br/>
@@ -118,7 +51,7 @@ public class CustomLuceneGeoGazetteerComparator {
 	 * PCLD - dependent political entity<br/>
 	 * PCLF - freely associated state<br/>
 	 * PCLH - historical political entity<br/>
-	 * PCLI - independent political entity<br/>
+	 * PCLI - independent political entity<br/> Country
 	 * PCLIX - section of independent political entity<br/>
 	 * PCLS - semi-independent political entity<br/>
 	 * PRSH - parish<br/>
@@ -144,24 +77,36 @@ public class CustomLuceneGeoGazetteerComparator {
 	 * PPLW - destroyed populated place<br/>
 	 * PPLX - section of populated place<br/>
 	 * STLMT - israeli settlement
+	 * 
+	 * L
+	 * CONT - Continent
+	 * RGN  - Regions example - Southern Asia
 	 */
-	static class FeatureCodeComparator extends FieldComparatorSource {
-
-		public static enum FeatureCode {
-			// A country, state, region
-			TERR, PCLI, PCLD, PCLIX, PCLF, PCL, PCLS, ADM1, ADMD, ADM2, LTER, ADM3, ADM4, ADM5, PRSH, ZN, ZNB, PCLH, ADM1H, ADM2H, ADM3H, ADM4H, ADMDH,
+	static class FeatureCodeComparator implements Comparator<Location> {
 		
+		public static enum FeatureCode {
+			//L 
+			CONT,
+			// A country, state, region
+			TERR, PCLI, PCLD, PCLIX, PCLF, PCL, PCLS, ADM1, 
+			//L
+			RGN,
+			// P city, village. Capital, Metro
+			PPLC, PPLA,  
+			// A country, state, region
+			ADM2, LTER, ADM3, ADMD, ADM4, ADM5, PRSH, ZN, ZNB, PCLH, ADM1H, ADM2H, ADM3H, ADM4H, ADMDH,
+			
 			// P city, village
-			PPLC, PPL, PPLA, PPLA2, PPLA3, PPLA4, STLMT, PPLS, PPLG, PPLF, PPLL, PPLR, PPLX, PPLW, PPLCH, PPLH, PPLQ,
+			PPLA2, PPLA3, PPLA4,PPL,STLMT, PPLS, PPLG, PPLF, PPLL, PPLR, PPLX, PPLW, PPLCH, PPLH, PPLQ,
+
+			// L parks,area
+			AGRC, AMUS, AREA, BSND, BSNP, BTL, CLG, CMN, CNS, COLF, CST, CTRB, DEVH, FLD, FLDI, GASF, GRAZ, GVL, INDS, LAND, LCTY, MILB, MNA, MVA, NVB, OAS, OILF, PEAT, PRK, PRT, QCKS, RES, RESA, RESF, RESH, RESN, RESP, RESV, RESW, RGNE, RGNH, RGNL, RNGA, SALT, SNOW, TRB,
 
 			// S spot, building, farm
 			ADMF, AGRF, AIRB, AIRF, AIRH, AIRP, AIRQ, AMTH, ANS, AQC, ARCH, ASTR, ASYL, ATHF, ATM, BANK, BCN, BDG, BDGQ, BLDG, BLDO, BP, BRKS, BRKW, BSTN, BTYD, BUR, BUSTN, BUSTP, CARN, CAVE, CH, CMP, CMPL, CMPLA, CMPMN, CMPO, CMPQ, CMPRF, CMTY, COMC, CRRL, CSNO, CSTL, CSTM, CTHSE, CTRA, CTRCM, CTRF, CTRM, CTRR, CTRS, CVNT, DAM, DAMQ, DAMSB, DARY, DCKD, DCKY, DIKE, DIP, DPOF, EST, ESTO, ESTR, ESTSG, ESTT, ESTX, FCL, FNDY, FRM, FRMQ, FRMS, FRMT, FT, FY, GATE, GDN, GHAT, GHSE, GOSP, GOVL, GRVE, HERM, HLT, HMSD, HSE, HSEC, HSP, HSPC, HSPD, HSPL, HSTS, HTL, HUT, HUTS, INSM, ITTR, JTY, LDNG, LEPC, LIBR, LNDF, LOCK, LTHSE, MALL, MAR, MFG, MFGB, MFGC, MFGCU, MFGLM, MFGM, MFGPH, MFGQ, MFGSG, MKT, ML, MLM, MLO, MLSG, MLSGQ, MLSW, MLWND, MLWTR, MN, MNAU, MNC, MNCR, MNCU, MNFE, MNMT, MNN, MNQ, MNQR, MOLE, MSQE, MSSN, MSSNQ, MSTY, MTRO, MUS, NOV, NSY, OBPT, OBS, OBSR, OILJ, OILQ, OILR, OILT, OILW, OPRA, PAL, PGDA, PIER, PKLT, PMPO, PMPW, PO, PP, PPQ, PRKGT, PRKHQ, PRN, PRNJ, PRNQ, PS, PSH, PSTB, PSTC, PSTP, PYR, PYRS, QUAY, RDCR, RECG, RECR, REST, RET, RHSE, RKRY, RLG, RLGR, RNCH, RSD, RSGNL, RSRT, RSTN, RSTNQ, RSTP, RSTPQ, RUIN, SCH, SCHA, SCHC, SCHL, SCHM, SCHN, SCHT, SECP, SHPF, SHRN, SHSE, SLCE, SNTR, SPA, SPLY, SQR, STBL, STDM, STNB, STNC, STNE, STNF, STNI, STNM, STNR, STNS, STNW, STPS, SWT, THTR, TMB, TMPL, TNKD, TOWR, TRANT, TRIG, TRMO, TWO, UNIP, UNIV, USGE, VETF, WALL, WALLA, WEIR, WHRF, WRCK, WTRW, ZNF, ZOO,
 
 			// T mountain,hill,rock
 			ASPH, ATOL, BAR, BCH, BCHS, BDLD, BLDR, BLHL, BLOW, BNCH, BUTE, CAPE, CFT, CLDA, CLF, CNYN, CONE, CRDR, CRQ, CRQS, CRTR, CUET, DLTA, DPR, DSRT, DUNE, DVD, ERG, FAN, FORD, FSR, GAP, GRGE, HDLD, HLL, HLLS, HMCK, HMDA, INTF, ISL, ISLET, ISLF, ISLM, ISLS, ISLT, ISLX, ISTH, KRST, LAVA, LEV, MESA, MND, MRN, MT, MTS, NKM, NTK, NTKS, PAN, PANS, PASS, PEN, PENX, PK, PKS, PLAT, PLATX, PLDR, PLN, PLNX, PROM, PT, PTS, RDGB, RDGE, REG, RK, RKFL, RKS, SAND, SBED, SCRP, SDL, SHOR, SINK, SLID, SLP, SPIT, SPUR, TAL, TRGD, TRR, UPLD, VAL, VALG, VALS, VALX, VLC,
-
-			// L parks,area
-			AGRC, AMUS, AREA, BSND, BSNP, BTL, CLG, CMN, CNS, COLF, CONT, CST, CTRB, DEVH, FLD, FLDI, GASF, GRAZ, GVL, INDS, LAND, LCTY, MILB, MNA, MVA, NVB, OAS, OILF, PEAT, PRK, PRT, QCKS, RES, RESA, RESF, RESH, RESN, RESP, RESV, RESW, RGN, RGNE, RGNH, RGNL, RNGA, SALT, SNOW, TRB,
 
 			// H stream, lake, ...
 			AIRS, ANCH, BAY, BAYS, BGHT, BNK, BNKR, BNKX, BOG, CAPG, CHN, CHNL, CHNM, CHNN, CNFL, CNL, CNLA, CNLB, CNLD, CNLI, CNLN, CNLQ, CNLSB, CNLX, COVE, CRKT, CRNT, CUTF, DCK, DCKB, DOMG, DPRG, DTCH, DTCHD, DTCHI, DTCHM, ESTY, FISH, FJD, FJDS, FLLS, FLLSX, FLTM, FLTT, GLCR, GULF, GYSR, HBR, HBRX, INLT, INLTQ, LBED, LGN, LGNS, LGNX, LK, LKC, LKI, LKN, LKNI, LKO, LKOI, LKS, LKSB, LKSC, LKSI, LKSN, LKSNI, LKX, MFGN, MGV, MOOR, MRSH, MRSHN, NRWS, OCN, OVF, PND, PNDI, PNDN, PNDNI, PNDS, PNDSF, PNDSI, PNDSN, POOL, POOLI, RCH, RDGG, RDST, RF, RFC, RFX, RPDS, RSV, RSVI, RSVT, RVN, SBKH, SD, SEA, SHOL, SILL, SPNG, SPNS, SPNT, STM, STMA, STMB, STMC, STMD, STMH, STMI, STMIX, STMM, STMQ, STMS, STMSB, STMX, STRT, SWMP, SYSI, TNLC, WAD, WADB, WADJ, WADM, WADS, WADX, WHRL, WLL, WLLQ, WLLS, WTLD, WTLDI, WTRC, WTRH,
@@ -173,64 +118,48 @@ public class CustomLuceneGeoGazetteerComparator {
 			BUSH, CULT, FRST, FRSTF, GRSLD, GRVC, GRVO, GRVP, GRVPN, HTH, MDW, OCH, SCRB, TREE, TUND, VIN, VINS, ll,
 		
 			// U undersea
-			APNU, ARCU, ARRU, BDLU, BKSU, BNKU, BSNU, CDAU, CNSU, CNYU, CRSU, DEPU, EDGU, ESCU, FANU, FLTU, FRZU, FURU, GAPU, GLYU, HLLU, HLSU, HOLU, KNLU, KNSU, LDGU, LEVU, MESU, MNDU, MOTU, MTU, PKSU, PKU, PLNU, PLTU, PNLU, PRVU, RDGU, RDSU, RFSU, RFU, RISU, SCNU, SCSU, SDLU, SHFU, SHLU, SHSU, SHVU, SILU, SLPU, SMSU, SMU, SPRU, TERU, TMSU, TMTU, TNGU, TRGU, TRNU, VALU, VLSU;
-		
+			APNU, ARCU, ARRU, BDLU, BKSU, BNKU, BSNU, CDAU, CNSU, CNYU, CRSU, DEPU, EDGU, ESCU, FANU, FLTU, FRZU, FURU, GAPU, GLYU, HLLU, HLSU, HOLU, KNLU, KNSU, LDGU, LEVU, MESU, MNDU, MOTU, MTU, PKSU, PKU, PLNU, PLTU, PNLU, PRVU, RDGU, RDSU, RFSU, RFU, RISU, SCNU, SCSU, SDLU, SHFU, SHLU, SHSU, SHVU, SILU, SLPU, SMSU, SMU, SPRU, TERU, TMSU, TMTU, TNGU, TRGU, TRNU, VALU, VLSU,
+			
+			//Unknown 
+			ADM3T,ADM2T,DAM2T,BANKT,SCHGT,BLDGT,MALLT,MNMTT,PEN2T,MTTYP, VALA3, RRM, RRL, SCHO3, RFLA3, MTLAP, RRP, MTSA, CHLXT, RRPD, MTLIT, AIRPT, PPLST, PCLIT, PPL2T, RRL3T, PCLIP, CHYF, LKLA3, MTLPT, MTLA3, HLLST, MNYTP, BAYTP, LKLXP, MTSG3, PRKL3, DIPAT, PLN2T, PPL3T, BLDG3, PPL2, PPLTP, CNYNP, SCHY, FRML, VALE, SCHPT, HSEAT, MTMIT, PPLI, FRMY, RSVXT, HTL3T, PPLD, CHHG3, STMG3, RDGEP, CHLGT, RVNNP, RNCHP, RDGET, LKLX, SCHE, DIPY, MTLNT, SCHG3, MESAP, MTLA, MNHE, RNCHT, PTLIT, PPLNP, LKTST, PLN2, CHMG3, DSRTT, RVNYP, RSVIT, STMIP, DIPO3, STMIT, RRLAP, BAYF, RRLA, RSTNT, PPLG3, SWMPT, PRKG3, HTLO3, RVNIP, MNQIT, PPLO3, RRLD, PPLNT, RVNIT, HLLI, MTPTP, PPLOP, WLLXP, MTMH, STMA3, CHNIT, PPLN, MTMI, HTLL, LKM, STMXT, HTLGT, PPLGT, RSVIP, STNRT, HTLY, LKLTP, BDGF, CMPD, MALL3, PPLXT, DIPTP, MTROP, PPLXP, PTM, HLLHP, HSEH, MTSIT, HSTST, FRMYP, PPLHP, LCTYP, PPLPT, AREAT, MTCHP, STMR, RESNT, STMP, RSVY, WHRF3, BNKST, PTKST, HLLIT, MTRO3, MTNNP, HLLAP, STMT, PPLAT, HLLIP, DAMY, PPLAP, PRKE, ADM1T, HTLIP, PPLIT, CNLIP, PPLIP, ADM23,
+			DIPL, BAYB, MTM, MTMY, PPLY, LKML, MNP,STMY, BDGY, LKLY;
+			
 			public static boolean exists(String val) {
 				return EnumUtils.isValidEnum(FeatureCode.class, val);
 			}
 		}
-
+		
 		@Override
-		public FieldComparator<BytesRef> newComparator(final String fieldName, final int numHits, final int sortPos,
-				boolean reversed) throws IOException {
-
-			// This Comparator is only meant for "feature code" field.
-			if (!GeoNameResolver.FIELD_NAME_FEATURE_CODE.equals(fieldName)) {
-				throw new RuntimeException(
-						"FeatureClassComparatorSource is not supposed to run on any other field apart from "
-								+ GeoNameResolver.FIELD_NAME_FEATURE_CODE);
+		public int compare(Location o1, Location o2) {
+			if (o1 == null) {
+				if (o2 == null) {
+					return 0;
+				}
+				return 1;
+			} else if (o2 == null) {
+				return -1;
 			}
 
-			return new FieldComparator.TermValComparator(numHits, fieldName, reversed) {
+			String code1 = StringUtils.trim(o1.getFeatureCode());
+			String code2 = StringUtils.trim(o2.getFeatureCode());
 
-				public int compareValues(BytesRef val1, BytesRef val2) {
-					String val1String = StringUtils.trim(new String(val1.bytes));
-					String val2String = StringUtils.trim(new String(val2.bytes));
+			int res;
+			try {
+				res = FeatureCode.valueOf(code1).compareTo(FeatureCode.valueOf(code2));
 
-					int res;
-					try {
-						res = FeatureCode.valueOf(val1String).compareTo(FeatureCode.valueOf(val2String));
+			} catch (IllegalArgumentException e) {
+				// If feature code is not present in Enum return 0.
+				// This is to safeguard from future changes in GeoNamesdata set
+				// LOG.warning(e.getMessage()); //Uncomment when implemented all codes
 
-					} catch (IllegalArgumentException e) {
-						// If feature code is not present in Enum return 0.
-						// This is to safeguard from future changes in GeoNamesdata set
-						// LOG.warning(e.getMessage()); //Uncomment when implemented all codes
+				// give higher rank to values present in enum
+				// if enum is present it's treated as smaller than other
+				res = !FeatureCode.exists(code1) ? !FeatureCode.exists(code2) ? 0 : 1000 : -1000;
+			}
 
-						// give higher rank to values present in enum
-						//if enum is present it's treated as smaller than other
-						res = !FeatureCode.exists(val1String) ? !FeatureCode.exists(val2String) ? 0 : 1000 : -1000;
-					}
-
-					return res;
-
-				}
-			};
+			return res;
 		}
-	}
 
-	/**
-	 * @return custom sort order for "feature code" field.
-	 */
-	public static SortField getFeatureClassSortField() {
-		return new SortField(GeoNameResolver.FIELD_NAME_FEATURE_CLASS,
-				new CustomLuceneGeoGazetteerComparator.FeatureClassComparator());
-	}
-
-	/**
-	 * @return custom sort order for "feature code" field.
-	 */
-	public static SortField getFeatureCodeSortField() {
-		return new SortField(GeoNameResolver.FIELD_NAME_FEATURE_CODE, new CustomLuceneGeoGazetteerComparator.FeatureCodeComparator());
 	}
 
 }

@@ -19,6 +19,7 @@ package edu.usc.ir.geo.gazetteer.service;
 
 import edu.usc.ir.geo.gazetteer.GeoNameResolver;
 import edu.usc.ir.geo.gazetteer.api.SearchResource;
+import edu.usc.ir.geo.gazetteer.api.HealthCheckAPI;
 import org.apache.catalina.Context;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.Wrapper;
@@ -44,7 +45,7 @@ public class Launcher {
         Wrapper servlet = context.createWrapper();
         servlet.setName("CXFNonSpringJaxrs");
         servlet.setServletClass(CXFNonSpringJaxrsServlet.class.getName());
-        servlet.addInitParameter("jaxrs.serviceClasses", SearchResource.class.getName());
+        servlet.addInitParameter("jaxrs.serviceClasses", SearchResource.class.getName() + " " + HealthCheckAPI.class.getName());
 
         servlet.setLoadOnStartup(1);
         context.addChild(servlet);

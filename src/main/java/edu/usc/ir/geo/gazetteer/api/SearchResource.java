@@ -18,6 +18,7 @@
 package edu.usc.ir.geo.gazetteer.api;
 
 import edu.usc.ir.geo.gazetteer.GeoNameResolver;
+import edu.usc.ir.geo.gazetteer.domain.Location;
 import edu.usc.ir.geo.gazetteer.service.Launcher;
 
 import javax.ws.rs.*;
@@ -67,10 +68,11 @@ public class SearchResource {
             return Response.status(Response.Status.BAD_REQUEST).build();
         }
         //TODO: configure JSON mapping
-        HashMap<String, List<String>> result = resolver.searchGeoName(search, count);
+        HashMap<String, List<Location>> result = resolver.searchGeoName(search, count);
+        
         try(ByteArrayOutputStream arrayOutputStream = new ByteArrayOutputStream()) {
             try (PrintStream stream = new PrintStream(arrayOutputStream)) {
-                GeoNameResolver.writeResult(result, stream);
+                GeoNameResolver.writeResultJson(result, stream);
             }
             return Response
                     .status(Response.Status.OK)
