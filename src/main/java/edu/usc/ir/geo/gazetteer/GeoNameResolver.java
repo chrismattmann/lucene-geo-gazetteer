@@ -26,6 +26,7 @@ import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -36,6 +37,7 @@ import java.util.logging.Logger;
 
 import edu.usc.ir.geo.gazetteer.domain.Location;
 import edu.usc.ir.geo.gazetteer.service.Launcher;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -243,7 +245,8 @@ public class GeoNameResolver implements Closeable {
 		if(inputLocations == null || inputLocations.size()==0){
 			return new ArrayList<>();
 		}
-		inputLocations.sort(new CustomLuceneGeoGazetteerComparator.FeatureCodeComparator());
+		
+		Collections.sort(inputLocations, new CustomLuceneGeoGazetteerComparator.FeatureCodeComparator());
 		return inputLocations.subList(0, inputLocations.size() > topCount ? topCount : inputLocations.size() - 1);
 	}
 
