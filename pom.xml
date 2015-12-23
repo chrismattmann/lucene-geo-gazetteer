@@ -3,7 +3,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>edu.usc.ir</groupId>
 	<artifactId>lucene-geo-gazetteer</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>0.3-SNAPSHOT</version>
 	<properties>
 		<tomcat.version>8.0.28</tomcat.version>
 		<cxf.version>2.2.3</cxf.version>
