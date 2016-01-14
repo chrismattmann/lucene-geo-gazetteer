@@ -6,4 +6,4 @@ cd $DIR
 export DIR_PATH=`pwd`
 cd $ORIG_DIR
 
-java -cp $DIR_PATH/../../../target/lucene-geo-gazetteer-0.0.1-SNAPSHOT-jar-with-dependencies.jar edu.usc.ir.geo.gazetteer.GeoNameResolver -i $DIR_PATH/../../../geoIndex "$@"
+java -cp $DIR_PATH/../../../target/lucene-geo-gazetteer-0.3-SNAPSHOT-jar-with-dependencies.jar edu.usc.ir.geo.gazetteer.GeoNameResolver -i $DIR_PATH/../../../geoIndex "$@"
