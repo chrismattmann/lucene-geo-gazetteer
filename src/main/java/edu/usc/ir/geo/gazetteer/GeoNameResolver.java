@@ -604,7 +604,12 @@ public class GeoNameResolver implements Closeable {
 				//TODO: get port from CLI args
 				int port = 8765;
 				Launcher.launchService(port, indexPath);
-			} else {
+			}else if (!line.hasOption("server") &&
+				!line.hasOption("search") &&
+				!line.hasOption("build") &&
+				!line.hasOption("index") &&
+				!line.hasOption("help")) 
+			{
 				System.err.println("Sub command not recognised");
 				System.exit(-1);
 			}
