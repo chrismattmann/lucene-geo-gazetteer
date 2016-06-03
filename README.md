@@ -46,6 +46,7 @@ Contributors
 * Madhav Sharan, USC
 * Yun Li, USC 
 * Chris A. Mattmann, JPL
+* Maziyar Boustani, JPL
 
 Credits 
 ======= 
