@@ -76,7 +76,7 @@
 						<configuration>
 							<rules>
 								<requireJavaVersion>
-									<version>[1.7.0,1.8)</version>
+									<version>[1.7.0,)</version>
 									<message>Error:: Please use jdk7 for compilation.</message>
 								</requireJavaVersion>
 							</rules>
