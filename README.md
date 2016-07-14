@@ -29,12 +29,12 @@ edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -b allCountries.txt`
 edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -s Pasadena
 Texas`
 5. The service mode:
-  ```
-  #Launch Server
-  $ lucene-geo-gazetteer -server
-  # Query
-  $ curl "localhost:8765/api/search?s=Pasadena&s=Texas&c=2"
-  ```
+    ```
+    #Launch Server
+    $ lucene-geo-gazetteer -server
+    # Query
+    $ curl "localhost:8765/api/search?s=Pasadena&s=Texas&c=2"
+    ```
 
 Questions, comments?  
 =================== 
