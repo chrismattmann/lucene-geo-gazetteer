@@ -30,7 +30,7 @@ edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -b allCountries.txt`
 edu.usc.ir.geo.gazetteer.GeoNameResolver -i geoIndex -s Pasadena
 Texas`
 5. The service mode:
-        ```
+        ```bash
         #Launch Server
         $ lucene-geo-gazetteer -server
         # Query
