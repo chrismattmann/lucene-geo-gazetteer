@@ -18,9 +18,7 @@ coordinates use the World Geodetic System 1984 (WGS84).
 1. What we need here is to download the latest version of
 allCountries.zip file from GeoNames.org: `curl -O
 http://download.geonames.org/export/dump/allCountries.zip` 
-2. and
-unzip the GeoNames file: 
-        `unzip allCountries.zip` 
+2. Unzip the GeoNames file: `unzip allCountries.zip` 
 3. Take the
 _allCountries.txt_ and use it to create a geoIndex: `java -cp
 target/lucene-geo-gazetteer-<version>-jar-with-dependencies.jar
