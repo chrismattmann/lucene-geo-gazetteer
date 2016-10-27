@@ -188,7 +188,7 @@ public class GeoNameResolver implements Closeable {
 		
 		IndexSearcher searcher = new IndexSearcher(createIndexReader(indexerPath));
 		Sort sort = new Sort(populationSort);
-		TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), filter, hitsPerPage, sort);
+		TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), filter, count, sort);
 
 		ScoreDoc[] scoreDocs = topDocs.scoreDocs;
 		HashMap<String, List<Location>> allCandidates = new HashMap<String, List<Location>>();
@@ -196,7 +196,7 @@ public class GeoNameResolver implements Closeable {
 		getMatchingCandidates(searcher, allCandidates, key, scoreDocs);
 		List<Location> results = allCandidates.get(key);
 		
-		return results.subList(0, count > results.size() ? results.size() : count);
+		return results;
 	}
 
 	private IndexReader createIndexReader(String indexerPath) throws IOException {
