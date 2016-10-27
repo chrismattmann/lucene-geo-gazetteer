@@ -30,7 +30,7 @@ public class RunReverseSearch {
 
 		resolver.buildIndex("./cities1000.txt", indexPath, false);
 		System.out.println("Places Near Los Angeles");
-		System.out.println(resolver.searchNearby(34.022157, -118.285152, 0.1,indexPath, 10));
+		System.out.println(resolver.searchNearby(34.022157, -118.285152, 5.0,indexPath, 10));
 		
 		resolver.close();
 

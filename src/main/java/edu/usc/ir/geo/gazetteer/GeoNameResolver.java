@@ -78,13 +78,15 @@ import org.apache.lucene.store.FSDirectory;
 
 import com.google.gson.Gson;
 import com.spatial4j.core.context.SpatialContext;
+import com.spatial4j.core.distance.DistanceUtils;
 import com.spatial4j.core.shape.Point;
 
 import edu.usc.ir.geo.gazetteer.domain.Location;
 import edu.usc.ir.geo.gazetteer.service.Launcher;
 
 public class GeoNameResolver implements Closeable {
-	private static final double REVERSE_DISTANCE_LIMIT = 0.1;
+	//UPPER BOUND FOR SEARCHING AN AREA IN MILES
+	private static final double REVERSE_DISTANCE_LIMIT = 5;
 	private static final String JSON_OPT = "json";
 	private static final String REVERSE_OPT = "r";
 	private static final String REVERSE_LONG_OPT = "enable-reverse";
@@ -177,11 +179,21 @@ public class GeoNameResolver implements Closeable {
 		return resolvedEntities;
 
 	}
-
-	public List<Location> searchNearby(Double latitude, Double longitude, Double distance, String indexerPath, int count) throws IOException {
-
+	
+	/**
+	 * Returns a list of location near a certain coordinate. 
+	 * @param latitude, @param longitude - Center of search area 
+	 * @param distanceInMiles - Search Radius in miles
+	 * @param indexerPath - Path to Lucene index
+	 * @param count - Upper bound to number of results
+	 * @return - List of locations sorted by population
+	 * @throws IOException
+	 */
+	public List<Location> searchNearby(Double latitude, Double longitude, Double distanceInMiles, String indexerPath, int count) throws IOException {
+		
+		double distanceInDeg = DistanceUtils.dist2Degrees(distanceInMiles,DistanceUtils.EARTH_EQUATORIAL_RADIUS_MI);
 		SpatialArgs spatialArgs = new SpatialArgs(SpatialOperation.IsWithin,
-				ctx.makeCircle(longitude,latitude, distance));
+				ctx.makeCircle(longitude,latitude, distanceInDeg));
 		
 		String key = latitude+"-"+longitude;
 		Filter filter = strategy.makeFilter(spatialArgs);
