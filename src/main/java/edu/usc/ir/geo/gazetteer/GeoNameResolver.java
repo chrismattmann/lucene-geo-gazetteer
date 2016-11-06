@@ -35,9 +35,6 @@ import java.util.PriorityQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-import edu.usc.ir.geo.gazetteer.domain.Location;
-import edu.usc.ir.geo.gazetteer.service.Launcher;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
@@ -59,20 +56,42 @@ import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.IndexableField;
 import org.apache.lucene.queryparser.classic.MultiFieldQueryParser;
+import org.apache.lucene.search.Filter;
 import org.apache.lucene.search.IndexSearcher;
+import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedNumericSortField;
+import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.spatial.SpatialStrategy;
+import org.apache.lucene.spatial.prefix.RecursivePrefixTreeStrategy;
+import org.apache.lucene.spatial.prefix.tree.GeohashPrefixTree;
+import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
+import org.apache.lucene.spatial.query.SpatialArgs;
+import org.apache.lucene.spatial.query.SpatialOperation;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.FSDirectory;
 
 import com.google.gson.Gson;
+import com.spatial4j.core.context.SpatialContext;
+import com.spatial4j.core.distance.DistanceUtils;
+import com.spatial4j.core.shape.Point;
+
+import edu.usc.ir.geo.gazetteer.domain.Location;
+import edu.usc.ir.geo.gazetteer.service.Launcher;
 
 public class GeoNameResolver implements Closeable {
+	//UPPER BOUND FOR SEARCHING AN AREA IN MILES
+	private static final double REVERSE_DISTANCE_LIMIT = 5;
 	private static final String JSON_OPT = "json";
+	private static final String REVERSE_OPT = "r";
+	private static final String REVERSE_LONG_OPT = "enable-reverse";
+	private static final String SEARCH_REVERSE_OPT = "sr";
+	private static final String SEARCH_REVERSE_LONG_OPT = "search-reverse";
 	/**
 	 * Below constants define name of field in lucene index
 	 */
@@ -102,8 +121,14 @@ public class GeoNameResolver implements Closeable {
 	private static Directory indexDir;
 	private static int hitsPerPage = 8;
 
-	private IndexReader indexReader;
+	//sort descending on population
+	SortField populationSort = new SortedNumericSortField(FIELD_NAME_POPULATION, SortField.Type.LONG, true);
 
+	private IndexReader indexReader;
+	private SpatialContext ctx = SpatialContext.GEO;
+	private SpatialPrefixTree grid = new GeohashPrefixTree(ctx, 11);
+	private SpatialStrategy strategy = new RecursivePrefixTreeStrategy(grid, "location");
+	 
 	public GeoNameResolver(){
 	}
 
@@ -154,6 +179,37 @@ public class GeoNameResolver implements Closeable {
 		return resolvedEntities;
 
 	}
+	
+	/**
+	 * Returns a list of location near a certain coordinate. 
+	 * @param latitude, @param longitude - Center of search area 
+	 * @param distanceInMiles - Search Radius in miles
+	 * @param indexerPath - Path to Lucene index
+	 * @param count - Upper bound to number of results
+	 * @return - List of locations sorted by population
+	 * @throws IOException
+	 */
+	public List<Location> searchNearby(Double latitude, Double longitude, Double distanceInMiles, String indexerPath, int count) throws IOException {
+		
+		double distanceInDeg = DistanceUtils.dist2Degrees(distanceInMiles,DistanceUtils.EARTH_EQUATORIAL_RADIUS_MI);
+		SpatialArgs spatialArgs = new SpatialArgs(SpatialOperation.IsWithin,
+				ctx.makeCircle(longitude,latitude, distanceInDeg));
+		
+		String key = latitude+"-"+longitude;
+		Filter filter = strategy.makeFilter(spatialArgs);
+		
+		IndexSearcher searcher = new IndexSearcher(createIndexReader(indexerPath));
+		Sort sort = new Sort(populationSort);
+		TopDocs topDocs = searcher.search(new MatchAllDocsQuery(), filter, count, sort);
+
+		ScoreDoc[] scoreDocs = topDocs.scoreDocs;
+		HashMap<String, List<Location>> allCandidates = new HashMap<String, List<Location>>();
+
+		getMatchingCandidates(searcher, allCandidates, key, scoreDocs);
+		List<Location> results = allCandidates.get(key);
+		
+		return results;
+	}
 
 	private IndexReader createIndexReader(String indexerPath) throws IOException {
 		File indexfile = new File(indexerPath);
@@ -186,44 +242,11 @@ public class GeoNameResolver implements Closeable {
 					q = new MultiFieldQueryParser(new String[] { FIELD_NAME_NAME,
 							FIELD_NAME_ALTERNATE_NAMES }, analyzer).parse(String.format("\"%s\"", name) );
 
-					//sort descending on population
-					SortField populationSort = new SortedNumericSortField(FIELD_NAME_POPULATION, SortField.Type.LONG, true);
-
 					Sort sort = new Sort(populationSort);
 					//Fetch 3 times desired values, these will be sorted on code and only desired number will be kept
 					ScoreDoc[] hits = searcher.search(q, hitsPerPage * 3 , sort).scoreDocs;
 
-					List<Location> topHits = new ArrayList<Location>();
-
-					for (int i = 0; i < hits.length; ++i) {
-						Location tmpLocObj = new Location();
-
-						int docId = hits[i].doc;
-						Document d;
-						try {
-							d = searcher.doc(docId);
-							tmpLocObj.setName(d.get(FIELD_NAME_NAME));
-							tmpLocObj.setLongitude(d.get(FIELD_NAME_LONGITUDE));
-							tmpLocObj.setLatitude(d.get(FIELD_NAME_LATITUDE));
-							//If alternate names are empty put name as actual name
-							//This covers missing data and equals weight for later computation
-							if (d.get(FIELD_NAME_ALTERNATE_NAMES).isEmpty()){
-								tmpLocObj.setAlternateNames(d.get(FIELD_NAME_NAME));
-							}else{
-								tmpLocObj.setAlternateNames(d.get(FIELD_NAME_ALTERNATE_NAMES));
-							}
-							tmpLocObj.setCountryCode(d.get(FIELD_NAME_COUNTRY_CODE));
-							tmpLocObj.setAdmin1Code(d.get(FIELD_NAME_ADMIN1_CODE));
-							tmpLocObj.setAdmin2Code(d.get(FIELD_NAME_ADMIN2_CODE));
-							tmpLocObj.setFeatureCode(d.get(FIELD_NAME_FEATURE_CODE));
-
-						} catch (IOException e) {
-							e.printStackTrace();
-						}
-						topHits.add(tmpLocObj);
-					}
-					//Picking hitsPerPage number of locations from feature code sorted list 
-					allCandidates.put(name, pickTopSortedByCode(topHits,hitsPerPage));
+					getMatchingCandidates(searcher, allCandidates, name, hits);
 				} catch (org.apache.lucene.queryparser.classic.ParseException e) {
 					e.printStackTrace();
 				}
@@ -233,6 +256,41 @@ public class GeoNameResolver implements Closeable {
 		HashMap<String, List<Location>> resolvedEntities = new HashMap<String, List<Location>>();
 		pickBestCandidates(resolvedEntities, allCandidates, count);
 		return resolvedEntities;
+	}
+
+	private void getMatchingCandidates(IndexSearcher searcher, HashMap<String, List<Location>> allCandidates,
+			String name, ScoreDoc[] hits) {
+		List<Location> topHits = new ArrayList<Location>();
+
+		for (int i = 0; i < hits.length; ++i) {
+			Location tmpLocObj = new Location();
+
+			int docId = hits[i].doc;
+			Document d;
+			try {
+				d = searcher.doc(docId);
+				tmpLocObj.setName(d.get(FIELD_NAME_NAME));
+				tmpLocObj.setLongitude(d.get(FIELD_NAME_LONGITUDE));
+				tmpLocObj.setLatitude(d.get(FIELD_NAME_LATITUDE));
+				//If alternate names are empty put name as actual name
+				//This covers missing data and equals weight for later computation
+				if (d.get(FIELD_NAME_ALTERNATE_NAMES).isEmpty()){
+					tmpLocObj.setAlternateNames(d.get(FIELD_NAME_NAME));
+				}else{
+					tmpLocObj.setAlternateNames(d.get(FIELD_NAME_ALTERNATE_NAMES));
+				}
+				tmpLocObj.setCountryCode(d.get(FIELD_NAME_COUNTRY_CODE));
+				tmpLocObj.setAdmin1Code(d.get(FIELD_NAME_ADMIN1_CODE));
+				tmpLocObj.setAdmin2Code(d.get(FIELD_NAME_ADMIN2_CODE));
+				tmpLocObj.setFeatureCode(d.get(FIELD_NAME_FEATURE_CODE));
+
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			topHits.add(tmpLocObj);
+		}
+		//Picking hitsPerPage number of locations from feature code sorted list 
+		allCandidates.put(name, pickTopSortedByCode(topHits,hitsPerPage));
 	}
 	
 	/**
@@ -356,10 +414,11 @@ public class GeoNameResolver implements Closeable {
 	 *            path of the gazetteer file
 	 * @param indexerPath
 	 *            path to the created Lucene index directory.
+	 * @param reverseGeocodingEnabled 
 	 * @throws IOException
 	 * @throws RuntimeException
 	 */
-	public void buildIndex(String gazetteerPath, String indexerPath)
+	public void buildIndex(String gazetteerPath, String indexerPath, boolean reverseGeocodingEnabled)
 			throws IOException {
 		File indexfile = new File(indexerPath);
 		indexDir = FSDirectory.open(indexfile.toPath());
@@ -379,11 +438,12 @@ public class GeoNameResolver implements Closeable {
 					if (count % 100000 == 0) {
 						logger.log(Level.INFO, "Indexed Row Count: " + count);
 					}
-					addDoc(indexWriter, line);
+					addDoc(indexWriter, line, reverseGeocodingEnabled);
 
 				} catch (RuntimeException re) {
-					logger.log(Level.WARNING, "Skipping... Error on line: {}",
+					logger.log(Level.WARNING, "Skipping... Error on line: {0}",
 							line);
+					re.printStackTrace();
 				}
 			}
 			logger.log(Level.WARNING, "Building Finished");
@@ -402,7 +462,7 @@ public class GeoNameResolver implements Closeable {
 	 * @throws IOException
 	 * @throws NumberFormatException
 	 */
-	private static void addDoc(IndexWriter indexWriter, final String line) {
+	private void addDoc(IndexWriter indexWriter, final String line, final boolean reverseGeocodingEnabled) {
 		String[] tokens = line.split("\t");
 
 		int ID = Integer.parseInt(tokens[0]);
@@ -447,7 +507,13 @@ public class GeoNameResolver implements Closeable {
 		doc.add(new TextField(FIELD_NAME_ADMIN1_CODE, admin1Code, Field.Store.YES));
 		doc.add(new TextField(FIELD_NAME_ADMIN2_CODE, admin2Code, Field.Store.YES));
 		doc.add(new NumericDocValuesField(FIELD_NAME_POPULATION, population));//sort enabled field
-
+		
+		if (reverseGeocodingEnabled) {
+			Point point = ctx.makePoint(longitude, latitude);
+			for (IndexableField f : strategy.createIndexableFields(point)) {
+				doc.add(f);
+			}
+		}
 
 		try {
 			indexWriter.addDocument(doc);
@@ -541,6 +607,16 @@ public class GeoNameResolver implements Closeable {
 				.withDescription("Formats output in well defined json structure")
 				.create(JSON_OPT);
 
+		Option reverseOption = OptionBuilder.withArgName("true / false ").hasArg()
+				.withLongOpt(REVERSE_LONG_OPT)
+				.withDescription("Add on indexing option for reverse geocoding. Defaults to false")
+				.create(REVERSE_OPT);
+
+		Option searchReverseOpt = OptionBuilder.withArgName("latitude , longitude").hasArgs()
+				.withLongOpt(SEARCH_REVERSE_LONG_OPT)
+				.withDescription("Search locations near this coordinate")
+				.create(SEARCH_REVERSE_OPT);
+
 		String indexPath = null;
 		String gazetteerPath = null;
 		Options options = new Options();
@@ -551,6 +627,8 @@ public class GeoNameResolver implements Closeable {
 		options.addOption(resultCountOpt);
 		options.addOption(serverOption);
 		options.addOption(jsonOption);
+		options.addOption(reverseOption);
+		options.addOption(searchReverseOpt);
 
 		// create the parser
 		CommandLineParser parser = new DefaultParser();
@@ -577,7 +655,18 @@ public class GeoNameResolver implements Closeable {
 			if (indexPath != null && gazetteerPath != null) {
 				LOG.info("Building Lucene index at path: [" + indexPath
 						+ "] with geoNames.org file: [" + gazetteerPath + "]");
-				resolver.buildIndex(gazetteerPath, indexPath);
+				boolean reverseEnabled = Boolean.valueOf(line.getOptionValue(REVERSE_LONG_OPT,"false"));
+				
+				resolver.buildIndex(gazetteerPath, indexPath, reverseEnabled);
+			}
+			if (line.hasOption(SEARCH_REVERSE_LONG_OPT)) {
+				String[] latLong = line.getOptionValues(SEARCH_REVERSE_LONG_OPT);
+				int count = Integer.parseInt(line.getOptionValue("count", "1"));
+				
+				List<Location> resolved = resolver
+							.searchNearby(Double.parseDouble(latLong[0]), Double.parseDouble(latLong[1]), REVERSE_DISTANCE_LIMIT, indexPath, count);
+				
+				System.out.println(new Gson().toJson(resolved));
 			}
 
 			if (line.hasOption("search")) {

@@ -4,3 +4,4 @@ data
 .project
 target
 geoIndex
+*.zip
