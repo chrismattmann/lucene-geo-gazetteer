@@ -3,7 +3,7 @@ Lucene Geo-Gazetteer
 A command line gazetteer
 built around the [Geonames.org](http://geonames.org/) dataset, that
 uses the [Apache Lucene](http://lucene.apache.org/) library to
-create a searchable gazetter.
+create a searchable gazetteer.
 
 
 Use 
